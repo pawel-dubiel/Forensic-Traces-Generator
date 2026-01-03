@@ -7,6 +7,7 @@ import { ForensicPhysicsEngine } from '../utils/SimulationEngine';
 
 interface LabProps {
   simState: SimulationState;
+  setSimState?: React.Dispatch<React.SetStateAction<SimulationState>>;
 }
 
 // Resolution Settings
@@ -67,7 +68,7 @@ const ForensicScaleBar: React.FC<{ position?: [number, number, number], rotation
     );
 };
 
-const MaterialSurface: React.FC<{ simState: SimulationState }> = ({ simState }) => {
+const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React.Dispatch<React.SetStateAction<SimulationState>> }> = ({ simState, setSimState }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   
   // Initialize Engine
@@ -235,7 +236,7 @@ const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) =
     );
 };
 
-const ForensicLab: React.FC<LabProps> = ({ simState }) => {
+const ForensicLab: React.FC<LabProps> = ({ simState, setSimState }) => {
   // Calculate light pos for main scene component too if needed, or just pass state down?
   // Actually, we can just render the light here.
   
@@ -266,7 +267,7 @@ const ForensicLab: React.FC<LabProps> = ({ simState }) => {
       <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.5} />
       
       <group position={[0, 0, 0]}>
-        <MaterialSurface simState={simState} />
+        <MaterialSurface simState={simState} setSimState={setSimState} />
         
         {simState.showScales && (
             <>
