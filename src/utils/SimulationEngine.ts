@@ -150,7 +150,11 @@ export class ForensicPhysicsEngine {
         return { profile: kernel, width: gridW, height: gridH, centerX, centerY, sharpness };
     }
 
-    simulateCut(
+    /**
+     * Executes the simulation loop with high-fidelity physics.
+     * Generator function yields progress (0-100).
+     */
+    *simulateCutGenerator(
         startX: number, startY: number, 
         angleDir: number, 
         force: number, 
@@ -158,12 +162,12 @@ export class ForensicPhysicsEngine {
         materialType: 'aluminum' | 'brass' | 'steel' | 'wood' | 'gold',
         speed: number,
         chatterParam: number
-    ) {
+    ): Generator<number> {
         const mat = MATERIALS[materialType];
         const { data } = this.surface;
         
         // Physics Loop Parameters
-        const timeStep = 0.0005; // 0.5ms steps (High temporal resolution)
+        const timeStep = 0.0005; // 0.5ms steps
         const totalDist = 40; // mm length of cut
         let currentDist = 0;
         
@@ -177,8 +181,10 @@ export class ForensicPhysicsEngine {
         let velocity = speed;
         const penetration = (force / (mat.hardness * 1000)) * 2.0;
 
-        // Fracture Threshold: If penetration is deep and material is brittle
-        const fractureThreshold = 0.5; // mm depth
+        // Fracture Threshold
+        const fractureThreshold = 0.5;
+
+        let stepsTaken = 0;
 
         while (currentDist < totalDist) {
             
@@ -190,10 +196,8 @@ export class ForensicPhysicsEngine {
             // 1. Carve
             this.applyKernel(cx, cy, toolZ, toolKernel, mat);
 
-            // 2. Fracture / Crack Generation (New)
-            // If dragging deep in brittle material, cracks appear sideways
+            // 2. Fracture
             if (mat.brittleness > 0.5 && Math.abs(toolZ) > fractureThreshold) {
-                // Random chance based on brittleness
                 if (Math.random() < mat.brittleness * 0.1) {
                     this.generateCrack(cx, cy, dirX, dirY, Math.abs(toolZ) * 2, mat.brittleness);
                 }
@@ -205,9 +209,16 @@ export class ForensicPhysicsEngine {
             cy += (dirY * velocity * timeStep) + (dirX * tremor);
             
             currentDist += velocity * timeStep;
+            stepsTaken++;
+
+            // Yield every 500 steps (approx 10-20ms of work) to keep UI responsive
+            if (stepsTaken % 500 === 0) {
+                 const prog = (currentDist / totalDist) * 90; // Go up to 90%
+                 yield prog;
+            }
         }
 
-        // 4. Elastic Springback
+        // 4. Elastic Springback (Global Pass) - Heavy!
         if (mat.elasticSpringback > 0) {
              for(let i=0; i<data.length; i++) {
                  if (data[i] < 0) { 
@@ -215,6 +226,8 @@ export class ForensicPhysicsEngine {
                  }
              }
         }
+        
+        yield 100;
     }
 
     private applyKernel(cx: number, cy: number, cz: number, kernel: ToolKernel, mat: any) {
