@@ -85,7 +85,7 @@ function App() {
           
           {/* Side Control Panel */}
           <Box sx={{ width: 350, borderLeft: '1px solid #333', overflowY: 'auto', bgcolor: 'background.paper' }}>
-            <Controls simState={simState} setSimState={setSimState} onExecute={handleExecute} />
+            <Controls simState={simState} setSimState={setSimState} onExecute={handleExecute} onReset={handleReset} />
           </Box>
         </Box>
       </Box>

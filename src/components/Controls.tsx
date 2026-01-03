@@ -188,9 +188,20 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           height: 50,
           background: 'linear-gradient(45deg, #00e5ff 30%, #2979ff 90%)',
           boxShadow: '0 3px 5px 2px rgba(33, 203, 243, .3)',
+          mb: 2
         }}
       >
         EXECUTE SIMULATION
+      </Button>
+
+      <Button 
+        variant="outlined" 
+        fullWidth 
+        color="error"
+        startIcon={<Trash2 />}
+        onClick={onReset}
+      >
+        CLEAR SURFACE
       </Button>
 
     </Box>
