@@ -122,7 +122,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         Target Material
       </Typography>
       
-      <FormControl fullWidth size="small" sx={{ mt: 2, mb: 4 }}>
+      <FormControl fullWidth size="small" sx={{ mt: 2, mb: 3 }}>
         <InputLabel>Surface Material</InputLabel>
         <Select
           value={simState.material}
