@@ -1,0 +1,84 @@
+import { useState } from 'react';
+import ForensicLab from './components/ForensicLab';
+import Controls from './components/Controls';
+import { Box, CssBaseline, ThemeProvider, createTheme, Typography, AppBar, Toolbar } from '@mui/material';
+
+// Define the simulation state interface
+export interface SimulationState {
+  toolType: 'screwdriver' | 'knife' | 'crowbar';
+  toolHardness: number; // 0-10 Mohs
+  angle: number; // degrees
+  force: number; // Newtons
+  direction: number; // degrees (0-360)
+  speed: number; // mm/s (affects chatter)
+  chatter: number; // 0-1 range (vibration intensity)
+  toolWear: number; // 0-1 range (micro-chipping/dullness)
+  material: 'aluminum' | 'steel' | 'brass' | 'wood';
+  isSimulating: boolean;
+}
+
+const darkTheme = createTheme({
+  palette: {
+    mode: 'dark',
+    primary: {
+      main: '#00e5ff',
+    },
+    background: {
+      default: '#121212',
+      paper: '#1e1e1e',
+    },
+  },
+  typography: {
+    fontFamily: '"Roboto Mono", monospace',
+  },
+});
+
+function App() {
+  const [simState, setSimState] = useState<SimulationState>({
+    toolType: 'screwdriver',
+    toolHardness: 8,
+    angle: 45,
+    force: 50,
+    direction: 0,
+    speed: 10,
+    chatter: 0.2,
+    toolWear: 0.1,
+    material: 'aluminum',
+    isSimulating: false,
+  });
+
+  const handleExecute = () => {
+    setSimState(prev => ({ ...prev, isSimulating: true }));
+    // Reset simulation flag after a short delay or handle inside the component
+    setTimeout(() => setSimState(prev => ({ ...prev, isSimulating: false })), 100);
+  };
+
+  return (
+    <ThemeProvider theme={darkTheme}>
+      <CssBaseline />
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+        <AppBar position="static" color="default" elevation={0} sx={{ borderBottom: '1px solid #333' }}>
+          <Toolbar variant="dense">
+            <Typography variant="h6" component="div" sx={{ flexGrow: 1, color: 'primary.main', fontWeight: 'bold' }}>
+              FORENSIC MARK SIMULATOR v1.0
+            </Typography>
+          </Toolbar>
+        </AppBar>
+        
+        <Box sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
+          {/* Main 3D Viewport */}
+          <Box sx={{ flexGrow: 1, position: 'relative' }}>
+            <ForensicLab simState={simState} />
+          </Box>
+          
+          {/* Side Control Panel */}
+          <Box sx={{ width: 350, borderLeft: '1px solid #333', overflowY: 'auto', bgcolor: 'background.paper' }}>
+            <Controls simState={simState} setSimState={setSimState} onExecute={handleExecute} />
+          </Box>
+        </Box>
+      </Box>
+    </ThemeProvider>
+  );
+}
+
+export default App;
