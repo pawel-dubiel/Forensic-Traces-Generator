@@ -147,24 +147,15 @@ export class ForensicPhysicsEngine {
             }
         }
 
-        return {
-            profile: kernel,
-            width: gridW,
-            height: gridH,
-            centerX,
-            centerY
-        };
+        return { profile: kernel, width: gridW, height: gridH, centerX, centerY, sharpness };
     }
 
-    /**
-     * Executes the simulation loop with high-fidelity physics.
-     */
     simulateCut(
         startX: number, startY: number, 
         angleDir: number, 
         force: number, 
         toolKernel: ToolKernel,
-        materialType: 'aluminum' | 'brass' | 'steel' | 'wood',
+        materialType: 'aluminum' | 'brass' | 'steel' | 'wood' | 'gold',
         speed: number,
         chatterParam: number
     ) {
@@ -172,7 +163,7 @@ export class ForensicPhysicsEngine {
         const { data } = this.surface;
         
         // Physics Loop Parameters
-        const timeStep = 0.002; // s
+        const timeStep = 0.0005; // 0.5ms steps (High temporal resolution)
         const totalDist = 40; // mm length of cut
         let currentDist = 0;
         
@@ -183,62 +174,51 @@ export class ForensicPhysicsEngine {
         const dirX = Math.cos(rad);
         const dirY = Math.sin(rad);
 
-        // Dynamics State
-        // Stick-slip: Velocity oscillates
-        let velocity = speed; // mm/s
+        let velocity = speed;
+        const penetration = (force / (mat.hardness * 1000)) * 2.0;
 
-        // Determine penetration depth based on force/hardness (Reference depth)
-        const penetration = (force / (mat.hardness * 1000)) * 2.0; // Multiplier for visual scale
+        // Fracture Threshold: If penetration is deep and material is brittle
+        const fractureThreshold = 0.5; // mm depth
 
-        // Simulation Loop
         while (currentDist < totalDist) {
             
-            // 1. Chatter / Stick-Slip Update
-            // Simple harmonic motion approximation for tool tip vibration
-            // We use speed/stiffness relation implicitly in freq
-            
-            // If stickSlipPhase is active, we modulate the Z depth or Step size
-            const chatterAmp = chatterParam * 0.2; // up to 0.2mm vibration
+            // Chatter / Stick-Slip
+            const chatterAmp = chatterParam * 0.2; 
             const vibration = Math.sin(currentDist * 10) * chatterAmp; 
-
-            // Current tool Z (Global Z)
-            // Surface is at Z=0 roughly. Tool penetrates to -penetration.
-            // Plus vibration.
             const toolZ = -penetration + vibration;
 
-            // 2. Carve (Boolean Subtraction)
-            this.applyKernel(cx, cy, toolZ, toolKernel, mat.flow);
+            // 1. Carve
+            this.applyKernel(cx, cy, toolZ, toolKernel, mat);
+
+            // 2. Fracture / Crack Generation (New)
+            // If dragging deep in brittle material, cracks appear sideways
+            if (mat.brittleness > 0.5 && Math.abs(toolZ) > fractureThreshold) {
+                // Random chance based on brittleness
+                if (Math.random() < mat.brittleness * 0.1) {
+                    this.generateCrack(cx, cy, dirX, dirY, Math.abs(toolZ) * 2, mat.brittleness);
+                }
+            }
 
             // 3. Move
-            // Add slight randomness to trajectory (Human hand tremor)
             const tremor = (Math.random() - 0.5) * 0.05;
-            
             cx += (dirX * velocity * timeStep) + (-dirY * tremor);
             cy += (dirY * velocity * timeStep) + (dirX * tremor);
             
             currentDist += velocity * timeStep;
         }
 
-        // 4. Elastic Springback (Global Pass)
-        // Metal recovers slightly after stress is removed.
-        // We raise the cut areas slightly.
+        // 4. Elastic Springback
         if (mat.elasticSpringback > 0) {
              for(let i=0; i<data.length; i++) {
-                 if (data[i] < 0) { // If it was cut
+                 if (data[i] < 0) { 
                      data[i] += Math.abs(data[i]) * mat.elasticSpringback;
                  }
              }
         }
     }
 
-    /**
-     * Stamps the tool kernel into the surface at (cx, cy, cz).
-     * Calculates displacement and handles Pile-up (Volume conservation).
-     */
-    private applyKernel(cx: number, cy: number, cz: number, kernel: ToolKernel, flowFactor: number) {
+    private applyKernel(cx: number, cy: number, cz: number, kernel: ToolKernel, mat: any) {
         const res = this.surface.resolution;
-        
-        // Grid coordinates
         const gx = Math.floor(cx * res);
         const gy = Math.floor(cy * res);
         
@@ -246,8 +226,9 @@ export class ForensicPhysicsEngine {
         const startY = gy - kernel.centerY;
         
         let displacedVolume = 0;
+        let maxDepth = 0;
 
-        // Pass 1: Carve and measure displaced volume
+        // Pass 1: Carve
         for (let ky = 0; ky < kernel.height; ky++) {
             for (let kx = 0; kx < kernel.width; kx++) {
                 const mapX = startX + kx;
@@ -255,43 +236,120 @@ export class ForensicPhysicsEngine {
                 
                 if (mapX >= 0 && mapX < this.surface.width && mapY >= 0 && mapY < this.surface.height) {
                     const idx = mapY * this.surface.width + mapX;
-                    
-                    // Tool height at this pixel = ToolGlobalZ + KernelOffset
                     const toolHeight = cz + kernel.profile[ky * kernel.width + kx];
-                    
                     const currentHeight = this.surface.data[idx];
                     
                     if (toolHeight < currentHeight) {
                         const diff = currentHeight - toolHeight;
                         displacedVolume += diff;
                         this.surface.data[idx] = toolHeight; // Carve
+                        if (Math.abs(toolHeight) > maxDepth) maxDepth = Math.abs(toolHeight);
                     }
                 }
             }
         }
 
-        // Pass 2: Pile-up (Redistribute volume to edges)
-        // Simplified: Add fraction of displaced volume to the immediate perimeter of the tool
-        if (displacedVolume > 0 && flowFactor > 0) {
-            const pileUpAmount = (displacedVolume * flowFactor) / (kernel.width * 2 + kernel.height * 2); 
-            // Distribute to a "halo" around the kernel
-            // Rough approximation for speed (even though user said speed doesn't matter, O(N^2) convolution is too much for JS single thread 60hz)
-            // We just raise the bounding box edges.
+        // Pass 2: Pile-up vs Chip Formation (New)
+        if (displacedVolume > 0) {
+            // How much material flows vs flies away?
+            // High sharpness + High brittleness = High Chip Ratio (Low Pile-up)
+            // Low sharpness (blunt) + Low brittleness (ductile) = High Pile-up
             
-            const range = 4; // Pileup width in pixels
-            for (let r = 1; r <= range; r++) {
-                this.addPileUpRing(startX - r, startY - r, kernel.width + r*2, kernel.height + r*2, pileUpAmount / r);
+            const chipRatio = kernel.sharpness * mat.brittleness; // 0 to 1
+            const flowVolume = displacedVolume * mat.flow * (1 - chipRatio);
+            
+            if (flowVolume > 0) {
+                const pileUpAmount = flowVolume / (kernel.width * 2 + kernel.height * 2); 
+                const range = 4;
+                for (let r = 1; r <= range; r++) {
+                    this.addPileUpRing(startX - r, startY - r, kernel.width + r*2, kernel.height + r*2, pileUpAmount / r);
+                }
+            }
+
+            // Visualizing "Chips" / Debris? 
+            // In a heightfield, we can't show flying particles.
+            // But we can leave "roughness" in the cut to simulate torn material.
+            if (chipRatio > 0.5) {
+                // Roughen the bottom of the cut we just made
+                this.roughenCut(startX, startY, kernel.width, kernel.height, chipRatio * 0.05);
             }
         }
     }
 
+    private generateCrack(cx: number, cy: number, dirX: number, dirY: number, energy: number, brittleness: number) {
+        const res = this.surface.resolution;
+        let x = cx;
+        let y = cy;
+        
+        // Crack shoots out semi-randomly but biased away from the cut direction
+        // Normal to cut is (-dirY, dirX)
+        const normalX = -dirY;
+        const normalY = dirX;
+        
+        // Randomly choose left or right side + random spread
+        const side = Math.random() > 0.5 ? 1 : -1;
+        const spread = (Math.random() - 0.5) * 1.0; // +/- 0.5 rad spread
+        
+        // Rotate vector by spread
+        const cosS = Math.cos(spread);
+        const sinS = Math.sin(spread);
+        const randNormalX = normalX * cosS - normalY * sinS;
+        const randNormalY = normalX * sinS + normalY * cosS;
+
+        const crackDirX = randNormalX * side;
+        const crackDirY = randNormalY * side;
+        
+        // Normalize
+        const len = Math.sqrt(crackDirX*crackDirX + crackDirY*crackDirY);
+        const cDx = crackDirX / len;
+        const cDy = crackDirY / len;
+        
+        let length = energy * 5 * brittleness; // Crack length in mm
+        let steps = Math.floor(length * res);
+        
+        // Walk the crack
+        for(let i=0; i<steps; i++) {
+            x += cDx * (1/res);
+            y += cDy * (1/res);
+            
+            // Jitter path (lightning bolt style)
+            x += (Math.random()-0.5) * 0.05;
+            y += (Math.random()-0.5) * 0.05;
+
+            const gx = Math.floor(x * res);
+            const gy = Math.floor(y * res);
+            
+            if (gx >= 0 && gx < this.surface.width && gy >= 0 && gy < this.surface.height) {
+                const idx = gy * this.surface.width + gx;
+                // Crack is a thin deep fissure
+                // Depth tapers off
+                const depth = (1 - (i/steps)) * 0.2; // up to 0.2mm deep crack
+                this.surface.data[idx] -= depth;
+            }
+        }
+    }
+
+    private roughenCut(startX: number, startY: number, w: number, h: number, amount: number) {
+        for (let ky = 0; ky < h; ky++) {
+             for (let kx = 0; kx < w; kx++) {
+                 const mapX = startX + kx;
+                 const mapY = startY + ky;
+                 if (mapX >= 0 && mapX < this.surface.width && mapY >= 0 && mapY < this.surface.height) {
+                     const idx = mapY * this.surface.width + mapX;
+                     // Only roughen if it's actually cut (negative Z)
+                     if (this.surface.data[idx] < -0.01) {
+                         this.surface.data[idx] -= Math.random() * amount;
+                     }
+                 }
+             }
+        }
+    }
+
     private addPileUpRing(x: number, y: number, w: number, h: number, amount: number) {
-        // Top & Bottom
         for (let i = x; i < x + w; i++) {
             this.safeAdd(i, y, amount);
             this.safeAdd(i, y + h - 1, amount);
         }
-        // Left & Right
         for (let j = y + 1; j < y + h - 1; j++) {
             this.safeAdd(x, j, amount);
             this.safeAdd(x + w - 1, j, amount);
@@ -301,7 +359,6 @@ export class ForensicPhysicsEngine {
     private safeAdd(x: number, y: number, val: number) {
         if (x >= 0 && x < this.surface.width && y >= 0 && y < this.surface.height) {
             const idx = y * this.surface.width + x;
-            // Don't pile up on top of the cut we just made (check if it's deep)
             if (this.surface.data[idx] > -0.5) { 
                 this.surface.data[idx] += val;
             }
