@@ -5,7 +5,7 @@ import { Box, CssBaseline, ThemeProvider, createTheme, Typography, AppBar, Toolb
 
 // Define the simulation state interface
 export interface SimulationState {
-  toolType: 'screwdriver' | 'knife' | 'crowbar' | 'hammer_face' | 'hammer_claw';
+  toolType: 'screwdriver' | 'knife' | 'crowbar' | 'hammer_face' | 'hammer_claw' | 'spoon';
   toolHardness: number; // 0-10 Mohs
   angle: number; // degrees
   force: number; // Newtons

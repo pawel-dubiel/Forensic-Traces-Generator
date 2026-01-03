@@ -150,10 +150,31 @@ export class ForensicPhysicsEngine {
                         z += curve;
                     }
                     sharpness = 0.6;
+                } else if (type === 'spoon') {
+                    // Ellipsoidal Bowl
+                    // sizeMM is width (approx 30mm usually)
+                    // Let's assume standard teaspoon: 30mm width, 45mm length
+                    // Depth approx 10mm
+                    
+                    // Simple paraboloid approximation: z = (x^2 / A) + (y^2 / B)
+                    // toolDy is Width axis. toolDx is Length axis.
+                    
+                    const A = sizeMM * 0.8; // Curvature factor Width
+                    const B = sizeMM * 1.5; // Curvature factor Length (flatter lengthwise)
+                    
+                    z = (toolDy * toolDy) / A + (toolDx * toolDx) / B;
+                    
+                    sharpness = 0.2; // Smooth but firm
                 }
 
                 // 3. Apply Angle of Attack Tilt
-                z += -toolDx * tiltSlope; // Tilt along the drag axis
+                // We assume "Dragging" (Pulling). 
+                // Direction of motion is +toolDx.
+                // The Handle (High Z) leads. The Tip (Low Z) trails.
+                // So as toolDx increases (forward), Z should increase (go up).
+                // Previous was -toolDx (Pushing).
+                
+                z += toolDx * tiltSlope; // Tilt along the drag axis
 
                 const microNoise = Math.sin(toolDy * 50) * 0.01 + Math.sin(toolDy * 120) * 0.005;
                 const damage = (Math.random() > 0.95 ? -1 : 1) * Math.random() * wearMag;

@@ -35,6 +35,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           <Divider />
           <MenuItem value="hammer_face">Hammer (Face)</MenuItem>
           <MenuItem value="hammer_claw">Hammer (Claw)</MenuItem>
+          <MenuItem value="spoon">Spoon (Bowl)</MenuItem>
         </Select>
       </FormControl>
 

@@ -4,7 +4,7 @@ import { OrbitControls, Environment, Grid, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SimulationState } from '../App';
 import { ForensicPhysicsEngine } from '../utils/SimulationEngine';
-import { ScrewdriverModel, KnifeModel, CrowbarModel, HammerFaceModel, HammerClawModel } from './Tools3D';
+import { ScrewdriverModel, KnifeModel, CrowbarModel, HammerFaceModel, HammerClawModel, SpoonModel } from './Tools3D';
 
 interface LabProps {
   simState: SimulationState;
@@ -103,6 +103,7 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
     if (simState.toolType === 'knife') toolSize = 1;
     if (simState.toolType === 'hammer_face') toolSize = 25;
     if (simState.toolType === 'hammer_claw') toolSize = 30;
+    if (simState.toolType === 'spoon') toolSize = 30;
 
     const kernel = engine.createToolKernel(
         simState.toolType,
@@ -240,6 +241,8 @@ const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) =
     });
 
     const dirRad = (simState.direction * Math.PI) / 180;
+    const yawRad = Math.PI / 2 - dirRad;
+    const pitchRad = -(simState.angle * Math.PI) / 180;
 
     // Which model to render?
     const renderTool = () => {
@@ -249,24 +252,17 @@ const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) =
             case 'crowbar': return <CrowbarModel />;
             case 'hammer_face': return <HammerFaceModel />;
             case 'hammer_claw': return <HammerClawModel />;
+            case 'spoon': return <SpoonModel />;
             default: return null;
         }
     };
 
     return (
-        <group ref={groupRef} position={[0, 0, 5]} rotation={[0, 0, dirRad]}> 
-            {/* Tilt Group: Rotates around Y axis based on Angle */}
-            {/* Angle 0 = Horizontal? Angle 90 = Vertical? */}
-            {/* If Angle is "Angle of Attack" (Incident): 
-                90 deg = Perpendicular (Normal). 
-                0 deg = Parallel.
-                Standard screwdriver use is near 45-60 deg.
-                We need to map this.
-                Let's assume tool models are built "Vertical" (along Y or Z).
-                ScrewdriverModel is built along Y. 
-                So 90 deg = No rotation. 0 deg = -90 rotation.
-            */}
-            <group rotation={[0, -(90 - simState.angle) * Math.PI / 180, 0]}>
+        // Physics Engine 0 deg = +X (Right).
+        // Tool models point along +Z; yaw maps +Z -> +X.
+        <group ref={groupRef} position={[0, 0, 5]} rotation={[0, yawRad, 0]}> 
+            {/* Angle of attack is a pitch (tilt into the surface) */}
+            <group rotation={[pitchRad, 0, 0]}>
                 {renderTool()}
                 {/* Force Vector Arrow */}
                 <arrowHelper args={[new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 0), 30, 0xff0000]} />
