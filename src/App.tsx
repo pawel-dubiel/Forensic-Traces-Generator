@@ -13,8 +13,12 @@ export interface SimulationState {
   speed: number; // mm/s (affects chatter)
   chatter: number; // 0-1 range (vibration intensity)
   toolWear: number; // 0-1 range (micro-chipping/dullness)
-  material: 'aluminum' | 'steel' | 'brass' | 'wood';
+  material: 'aluminum' | 'steel' | 'brass' | 'wood' | 'gold';
+  viewMode: 'standard' | 'heatmap' | 'normal';
+  rakingLightAngle: number; // 0-90 degrees
+  showScales: boolean;
   isSimulating: boolean;
+  isResetting: boolean;
 }
 
 const darkTheme = createTheme({

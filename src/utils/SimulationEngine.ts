@@ -5,31 +5,32 @@ export interface SurfaceMap {
     width: number;
     height: number;
     resolution: number; // points per mm
-    data: Float32Array; // Height values (Z)
+    data: Float64Array; // High-precision Height values (Z)
 }
 
 export interface ToolKernel {
-    profile: Float32Array; // 2D grid of the tool tip's Z offsets relative to tool center
+    profile: Float64Array; // 2D grid of the tool tip's Z offsets relative to tool center
     width: number; // grid units
     height: number; // grid units
     centerX: number;
     centerY: number;
+    sharpness: number; // 0-1 (1 is razor sharp)
 }
 
 // Material constants for the simulation loop
 export const MATERIALS = {
-    aluminum: { hardness: 0.5, flow: 0.8, elasticSpringback: 0.02 },
-    brass: { hardness: 0.7, flow: 0.6, elasticSpringback: 0.05 },
-    steel: { hardness: 0.9, flow: 0.3, elasticSpringback: 0.08 },
-    wood: { hardness: 0.2, flow: 0.1, elasticSpringback: 0.15 },
+    // Brittleness: 0 = Clay (100% Flow), 1 = Glass (100% Fracture/Chip)
+    aluminum: { hardness: 0.5, flow: 0.8, elasticSpringback: 0.02, brittleness: 0.1 },
+    brass: { hardness: 0.7, flow: 0.6, elasticSpringback: 0.05, brittleness: 0.2 },
+    steel: { hardness: 0.9, flow: 0.3, elasticSpringback: 0.08, brittleness: 0.1 },
+    wood: { hardness: 0.2, flow: 0.1, elasticSpringback: 0.15, brittleness: 0.9 }, // High brittleness = Splintering
+    gold: { hardness: 0.3, flow: 0.95, elasticSpringback: 0.01, brittleness: 0.0 }, // Very ductile, piles up easily
 };
 
 export class ForensicPhysicsEngine {
     surface: SurfaceMap;
 
     constructor(widthMM: number, heightMM: number, resolution: number = 20) {
-        // resolution 20 = 20 points per mm (50 micron precision)
-        // 60mm x 60mm area -> 1200 x 1200 grid = 1.44M points
         const w = Math.floor(widthMM * resolution);
         const h = Math.floor(heightMM * resolution);
         
