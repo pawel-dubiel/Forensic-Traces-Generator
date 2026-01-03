@@ -5,6 +5,8 @@ The **Forensic Tool Mark Simulator** is a high-fidelity scientific application d
 
 Unlike standard 3D modeling software, this application is driven by a **Discrete Element Physics Engine** (running in 64-bit precision) that calculates material yield, plastic flow, fracture mechanics, and dynamic friction in real-time.
 
+![Example](example1.gif)
+
 ---
 
 ## Physics Engine Mechanics
