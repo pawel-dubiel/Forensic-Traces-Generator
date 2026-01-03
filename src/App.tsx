@@ -17,6 +17,7 @@ export interface SimulationState {
   viewMode: 'standard' | 'heatmap' | 'normal';
   rakingLightAngle: number; // 0-90 degrees
   showScales: boolean;
+  progress: number; // 0-100
   isSimulating: boolean;
   isResetting: boolean;
 }
@@ -51,13 +52,13 @@ function App() {
     viewMode: 'standard',
     rakingLightAngle: 10,
     showScales: true,
+    progress: 0,
     isSimulating: false,
     isResetting: false,
   });
 
   const handleExecute = () => {
-    setSimState(prev => ({ ...prev, isSimulating: true }));
-    setTimeout(() => setSimState(prev => ({ ...prev, isSimulating: false })), 100);
+    setSimState(prev => ({ ...prev, isSimulating: true, progress: 0 }));
   };
 
   const handleReset = () => {
