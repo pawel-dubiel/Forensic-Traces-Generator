@@ -64,7 +64,7 @@ export class ForensicPhysicsEngine {
         this.generateBaseTopography();
     }
 
-    createToolKernel(type: string, sizeMM: number, wear: number, angleDeg: number): ToolKernel {
+    createToolKernel(type: string, sizeMM: number, wear: number, angleDeg: number, directionDeg: number): ToolKernel {
         const res = this.surface.resolution;
         const gridW = Math.floor(sizeMM * res);
         const gridH = Math.floor(sizeMM * res);

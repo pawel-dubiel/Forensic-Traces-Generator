@@ -107,7 +107,8 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
         simState.toolType,
         toolSize,
         simState.toolWear,
-        simState.angle
+        simState.angle,
+        simState.direction
     );
 
     // 2. Execute Physics Loop (Generator Pattern)
