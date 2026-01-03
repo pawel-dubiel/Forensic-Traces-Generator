@@ -344,17 +344,46 @@ export class ForensicPhysicsEngine {
         // Pass 2: Pile-up vs Chip Formation (New)
         if (displacedVolume > 0) {
             // How much material flows vs flies away?
-            // High sharpness + High brittleness = High Chip Ratio (Low Pile-up)
-            // Low sharpness (blunt) + Low brittleness (ductile) = High Pile-up
-            
             const chipRatio = kernel.sharpness * mat.brittleness; // 0 to 1
             const flowVolume = displacedVolume * mat.flow * (1 - chipRatio);
             
             if (flowVolume > 0) {
-                const pileUpAmount = flowVolume / (kernel.width * 2 + kernel.height * 2); 
-                const range = 4;
+                // CORRECTION 3: Volume Conservation
+                // Previous logic added pileUpAmount to EACH pixel in rings, creating massive matter.
+                // We need to distribute flowVolume across the total area of the rings.
+                
+                const range = 4; // Rings
+                // Calculate total weights
+                // Ring 1 Perimeter approx: 2*(W+H) + 4
+                // Ring r Perimeter approx: 2*(W+H) + 8*r
+                // Weight = 1/r.
+                // We need to sum (Pixels_in_Ring_r * Weight_r) to find normalization factor.
+                
+                let totalWeightedArea = 0;
+                const weights: number[] = [];
+                const ringPixels: number[] = [];
+                
+                for(let r=1; r<=range; r++) {
+                    // Pixels in this ring = Area(r) - Area(r-1)
+                    // Simplified: Perimeter is roughly 2w + 2h + 8r
+                    const p = 2*(kernel.width + kernel.height) + 8*r;
+                    
+                    const weight = 1.0 / r; // Decay
+                    weights.push(weight);
+                    ringPixels.push(p);
+                    totalWeightedArea += p * weight;
+                }
+                
+                // Now distribute
                 for (let r = 1; r <= range; r++) {
-                    this.addPileUpRing(startX - r, startY - r, kernel.width + r*2, kernel.height + r*2, pileUpAmount / r);
+                    const weight = weights[r-1];
+                    // Volume for this ring = TotalVolume * ( (Pixels*Weight) / TotalWeightedArea )
+                    // Height to add = VolumeRing / PixelsRing
+                    // Combined: Height = (TotalVolume * Weight) / TotalWeightedArea
+                    
+                    const heightToAdd = (flowVolume * weight) / totalWeightedArea;
+                    
+                    this.addPileUpRing(startX - r, startY - r, kernel.width + r*2, kernel.height + r*2, heightToAdd);
                 }
             }
 
