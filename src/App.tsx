@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import ForensicLab from './components/ForensicLab';
 import Controls from './components/Controls';
-import { Box, CssBaseline, ThemeProvider, createTheme, Typography, AppBar, Toolbar } from '@mui/material';
+import { Box, CssBaseline, ThemeProvider, createTheme, Typography, AppBar, Toolbar, LinearProgress } from '@mui/material';
 
 // Define the simulation state interface
 export interface SimulationState {
@@ -81,7 +81,25 @@ function App() {
         <Box sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
           {/* Main 3D Viewport */}
           <Box sx={{ flexGrow: 1, position: 'relative' }}>
-            <ForensicLab simState={simState} />
+            {simState.isSimulating && (
+                <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 }}>
+                    <LinearProgress variant="determinate" value={simState.progress} color="secondary" sx={{ height: 4 }} />
+                    <Typography 
+                        variant="caption" 
+                        sx={{ 
+                            position: 'absolute', 
+                            top: 10, 
+                            right: 10, 
+                            color: 'secondary.main', 
+                            fontWeight: 'bold',
+                            textShadow: '0 0 5px black'
+                        }}
+                    >
+                        CALCULATING PHYSICS... {Math.round(simState.progress)}%
+                    </Typography>
+                </Box>
+            )}
+            <ForensicLab simState={simState} setSimState={setSimState} />
           </Box>
           
           {/* Side Control Panel */}
