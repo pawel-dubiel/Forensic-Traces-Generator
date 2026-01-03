@@ -220,19 +220,56 @@ export class ForensicPhysicsEngine {
         const dirX = Math.cos(rad);
         const dirY = Math.sin(rad);
 
-        let velocity = speed;
-        const penetration = (force / (mat.hardness * 1000)) * 2.0;
+        let velocity = speed; // mm/s
+        
+        // CORRECTION 1: Non-Linear Contact Mechanics (Meyer's Law / Hardness)
+        // Depth d is related to Force F. 
+        // For Sharp (Cone/Wedge): F = k * d^2  ->  d = sqrt(F/k)
+        // For Blunt (Flat Punch): F = k * d    ->  d = F/k
+        // We assume a hybrid based on tool sharpness.
+        
+        // Base penetration (Linear ref)
+        const hardnessMPa = mat.hardness * 1000; // Arbitrary scale
+        const baseDepth = force / hardnessMPa; 
+        
+        // Adjust based on tool profile
+        // Sharp tools (Knife) follow Square Root law (penetrate easier initially, harder deeper)
+        // Blunt tools (Hammer) follow Linear law
+        let penetration = 0;
+        if (toolKernel.sharpness > 0.8) {
+             // Knife/Sharp: Power law 0.5
+             // Scaling factor to match visual expectations
+             penetration = Math.sqrt(baseDepth) * 2.0; 
+        } else {
+             // Blunt: Linear-ish
+             penetration = baseDepth * 2.0;
+        }
 
         // Fracture Threshold
         const fractureThreshold = 0.5;
 
         let stepsTaken = 0;
+        
+        // CORRECTION 2: Natural Frequency Chatter
+        // Chatter is a temporal vibration (Hz).
+        // Natural freq of hand/tool system approx 50-100Hz?
+        // Let's say 20Hz base freq for visible wobbles.
+        const naturalFreq = 20 + (chatterParam * 50); // Hz
+        let chatterPhase = 0;
 
         while (currentDist < totalDist) {
             
-            // Chatter / Stick-Slip
-            const chatterAmp = chatterParam * 0.2; 
-            const vibration = Math.sin(currentDist * 10) * chatterAmp; 
+            // Chatter / Stick-Slip Update
+            // Phase increment = 2*PI * freq * dt
+            // dt is timeStep
+            const phaseStep = 2 * Math.PI * naturalFreq * timeStep;
+            chatterPhase += phaseStep;
+            
+            // Amplitude scales with chatter param
+            const chatterAmp = chatterParam * 0.15; 
+            const vibration = Math.sin(chatterPhase) * chatterAmp; 
+            
+            // Apply vibration to Z
             const toolZ = -penetration + vibration;
 
             // 1. Carve
