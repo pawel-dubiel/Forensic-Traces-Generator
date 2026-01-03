@@ -164,8 +164,8 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
             // Heatmap Coloring
             // Map Z to RGB
             // Deep (negative) = Blue, High (positive/pileup) = Red, Zero = Green/Grey
-            // Scale: +/- 0.5mm range
-            const t = Math.max(-1, Math.min(1, z / 0.5)); // -1 to 1
+            // Scale: +/- 2.0mm range (Auto-scaling or wider fixed)
+            const t = Math.max(-1, Math.min(1, z / 2.0)); // -1 to 1
             
             let r=0, g=0, b=0;
             if (t < 0) {
@@ -262,19 +262,22 @@ const ForensicLab: React.FC<LabProps> = ({ simState, setSimState }) => {
     <Canvas shadows dpr={[1, 2]} camera={{ position: [0, 40, 40], fov: 45 }}>
       <color attach="background" args={['#050505']} />
       
-      <ambientLight intensity={0.1} />
+      <ambientLight intensity={0.05} />
       
-      {/* RAKING LIGHT */}
-      <spotLight 
+      {/* RAKING LIGHT (Directional for uniform grazing) */}
+      <directionalLight 
         position={[lightDist, lightH, 0]} 
-        target-position={[0, 0, 0]}
-        angle={0.5} 
-        penumbra={0.5} 
-        intensity={2.0} 
+        intensity={3.0} 
         castShadow 
         shadow-mapSize={[2048, 2048]} 
         shadow-bias={-0.0001}
       />
+      
+      {/* Visual Helper for Light Position */}
+      <mesh position={[lightDist, lightH, 0]}>
+        <sphereGeometry args={[1, 16, 16]} />
+        <meshBasicMaterial color="#ffff00" />
+      </mesh>
 
       <pointLight position={[-20, 20, -20]} intensity={0.2} color="#00e5ff" />
       
