@@ -325,7 +325,7 @@ const ForensicLab: React.FC<LabProps> = ({ simState, setSimState }) => {
         )}
 
         <Grid infiniteGrid fadeDistance={60} sectionColor="#00e5ff" cellColor="#1a1a1a" position={[0,-0.1,0]} />
-        <ToolVisualizer simState={simState} />
+        {simState.showTool && <ToolVisualizer simState={simState} />}
       </group>
       
       <Environment preset="studio" />

@@ -17,6 +17,7 @@ export interface SimulationState {
   viewMode: 'standard' | 'heatmap' | 'normal';
   rakingLightAngle: number; // 0-90 degrees
   showScales: boolean;
+  showTool: boolean;
   progress: number; // 0-100
   isSimulating: boolean;
   isResetting: boolean;
@@ -52,6 +53,7 @@ function App() {
     viewMode: 'standard',
     rakingLightAngle: 10,
     showScales: true,
+    showTool: true,
     progress: 0,
     isSimulating: false,
     isResetting: false,

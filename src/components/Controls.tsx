@@ -176,6 +176,16 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           }
           label="Show Scale Bars"
         />
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={simState.showTool}
+              onChange={(e) => handleChange('showTool', e.target.checked)}
+            />
+          }
+          label="Show 3D Tool"
+        />
       </Box>
 
       <Button 
