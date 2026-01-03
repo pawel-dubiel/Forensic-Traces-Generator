@@ -38,91 +38,107 @@ export class ForensicPhysicsEngine {
             width: w,
             height: h,
             resolution: resolution,
-            data: new Float32Array(w * h).fill(0)
+            data: new Float64Array(w * h).fill(0)
         };
         
         this.generateBaseTopography();
     }
 
     private generateBaseTopography() {
-        // Anisotropic Roughness (Brushed metal look)
         const { width, height, data } = this.surface;
         const freqX = 0.1;
-        const freqY = 0.005; // Stretched noise
+        const freqY = 0.005; 
         
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const idx = y * width + x;
-                
-                // Multi-octave noise (simplified)
                 const noise = Math.sin(x * freqX * 2) * 0.005 + 
                               Math.sin(x * freqX * 5 + y * freqY) * 0.002 + 
                               (Math.random() - 0.5) * 0.002;
-                
                 data[idx] = noise;
-
-                // Stochastic Pits
-                if (Math.random() < 0.00005) {
-                    data[idx] -= (Math.random() * 0.1); // 0.1mm deep pit
-                    // Pit neighbors
-                    if (x+1 < width) data[idx+1] -= 0.05;
-                }
             }
         }
     }
 
-    /**
-     * Creates a discrete height map of the tool tip based on geometry and wear.
-     * This allows for ANY cross-section (flat, round, damaged).
-     */
+    reset() {
+        this.generateBaseTopography();
+    }
+
     createToolKernel(type: string, sizeMM: number, wear: number, angleDeg: number): ToolKernel {
         const res = this.surface.resolution;
         const gridW = Math.floor(sizeMM * res);
-        const gridH = Math.floor(sizeMM * res); // Square kernel for simplicity
-        const kernel = new Float32Array(gridW * gridH).fill(999); // Start high (no cut)
+        const gridH = Math.floor(sizeMM * res);
+        const kernel = new Float64Array(gridW * gridH).fill(999);
         
         const centerX = Math.floor(gridW / 2);
         const centerY = Math.floor(gridH / 2);
 
-        // Convert wear to roughness magnitude
-        const wearMag = wear * 0.2; // up to 0.2mm deviations
+        const wearMag = wear * 0.2; 
+        let sharpness = 0.5;
 
         for (let y = 0; y < gridH; y++) {
             for (let x = 0; x < gridW; x++) {
                 const idx = y * gridW + x;
-                const dx = (x - centerX) / res; // mm from center
+                const dx = (x - centerX) / res;
                 const dy = (y - centerY) / res;
                 
-                // 1. Base Geometry (Z = 0 is tip)
                 let z = 0;
                 
                 if (type === 'screwdriver') {
-                    // Flat with slight rounding at edges
                     if (Math.abs(dx) > sizeMM/2) z = 999;
                     else z = Math.abs(dx) > (sizeMM/2 - 0.2) ? (Math.abs(dx) - (sizeMM/2 - 0.2)) : 0;
+                    sharpness = 0.3;
                 } else if (type === 'knife') {
-                    // V-shape
-                    z = Math.abs(dx) * 2; // Sharp slope
+                    z = Math.abs(dx) * 2; 
+                    sharpness = 0.95;
                 } else if (type === 'crowbar') {
-                    // Round
                     const r = sizeMM / 2;
                     const d = Math.sqrt(dx*dx);
                     if (d > r) z = 999;
                     else z = r - Math.sqrt(r*r - d*d);
+                    sharpness = 0.1;
+                } else if (type === 'hammer_face') {
+                    // Large flat circle with beveled edge
+                    // sizeMM is diameter
+                    const r = sizeMM / 2;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist > r) z = 999;
+                    else if (dist > r * 0.8) z = (dist - r * 0.8); // Bevel
+                    else z = 0; // Flat face
+                    sharpness = 0.05; // Very blunt
+                } else if (type === 'hammer_claw') {
+                    // Two wedges separated by gap
+                    // Claw curve in Y direction
+                    const clawWidth = sizeMM * 0.4; // width of total assembly
+                    const gap = sizeMM * 0.15;
+                    
+                    if (Math.abs(dx) < gap) {
+                        z = 999; // Gap
+                    } else if (Math.abs(dx) > clawWidth) {
+                        z = 999; // Outside
+                    } else {
+                        // The claw prongs
+                        // Tapered points
+                        // Base shape is curved wedge
+                        const prongCenter = gap + (clawWidth - gap)/2;
+                        const localDx = Math.abs(Math.abs(dx) - prongCenter);
+                        
+                        // Sharpness of the claw tip
+                        z = localDx * 1.5; 
+                        
+                        // Curve along Y (hook shape)
+                        const curveY = (dy * dy) * 0.2;
+                        z += curveY;
+                    }
+                    sharpness = 0.6;
                 }
 
-                // 2. Add Angle Tilt (simulating angle of attack)
-                // If angle is 45 deg, the "back" of the tool is higher.
-                // We model this by tilting the kernel in Y
                 const tiltSlope = Math.tan((90 - angleDeg) * Math.PI / 180);
                 z += dy * tiltSlope;
 
-                // 3. Micro-wear (Serration/Chipping)
-                // Consistent along Y (extruded profile) but noisy in X
                 const microNoise = Math.sin(dx * 50) * 0.01 + Math.sin(dx * 120) * 0.005;
                 const damage = (Math.random() > 0.95 ? -1 : 1) * Math.random() * wearMag;
                 
-                // Only apply wear to the cutting surface
                 if (z < 10) {
                      kernel[idx] = z + microNoise + (damage * 0.1);
                 } else {

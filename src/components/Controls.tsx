@@ -32,6 +32,9 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           <MenuItem value="screwdriver">Flathead Screwdriver</MenuItem>
           <MenuItem value="knife">Knife Edge</MenuItem>
           <MenuItem value="crowbar">Crowbar Tip</MenuItem>
+          <Divider />
+          <MenuItem value="hammer_face">Hammer (Face)</MenuItem>
+          <MenuItem value="hammer_claw">Hammer (Claw)</MenuItem>
         </Select>
       </FormControl>
 

@@ -85,13 +85,26 @@ const MaterialSurface: React.FC<{ simState: SimulationState }> = ({ simState }) 
     }
   }, [simState.isSimulating]);
 
+  useEffect(() => {
+    if (simState.isResetting) {
+        engine.reset();
+        updateMeshFromEngine();
+    }
+  }, [simState.isResetting]);
+
   const runSimulation = () => {
     if (!meshRef.current) return;
 
     // 1. Create Tool Kernel
+    let toolSize = 6;
+    if (simState.toolType === 'crowbar') toolSize = 10;
+    if (simState.toolType === 'knife') toolSize = 1;
+    if (simState.toolType === 'hammer_face') toolSize = 25;
+    if (simState.toolType === 'hammer_claw') toolSize = 30;
+
     const kernel = engine.createToolKernel(
         simState.toolType,
-        simState.toolType === 'crowbar' ? 10 : (simState.toolType === 'screwdriver' ? 6 : 1), // Size MM
+        toolSize,
         simState.toolWear,
         simState.angle
     );
@@ -166,6 +179,7 @@ const MaterialSurface: React.FC<{ simState: SimulationState }> = ({ simState }) 
         case 'brass': return '#e6c35c';
         case 'steel': return '#757980';
         case 'wood': return '#8a5e3a';
+        case 'gold': return '#ffd700';
         default: return '#888';
     }
   }, [simState.material]);
