@@ -76,73 +76,115 @@ export class ForensicPhysicsEngine {
         const wearMag = wear * 0.2; 
         let sharpness = 0.5;
 
+        // Convert Yaw to Rads
+        // We want the tool to align with the drag direction.
+        // If direction is 0 (East/Right), and we assume tool points along that axis.
+        const yawRad = (directionDeg * Math.PI) / 180;
+        const cosYaw = Math.cos(yawRad);
+        const sinYaw = Math.sin(yawRad);
+
+        const tiltSlope = Math.tan((90 - angleDeg) * Math.PI / 180);
+
         for (let y = 0; y < gridH; y++) {
             for (let x = 0; x < gridW; x++) {
                 const idx = y * gridW + x;
-                const dx = (x - centerX) / res;
-                const dy = (y - centerY) / res;
                 
+                // 1. Center coordinates
+                const rawDx = (x - centerX) / res;
+                const rawDy = (y - centerY) / res;
+                
+                // 2. Rotate coordinates into Tool Space (Local Tool Coords)
+                // We rotate the GRID point backwards to find where it lands on the TOOL
+                // Standard 2D rotation:
+                // toolX = x cos - y sin
+                // toolY = x sin + y cos
+                const toolDx = rawDx * cosYaw + rawDy * sinYaw; // "Width" axis of tool (if moving X)
+                const toolDy = -rawDx * sinYaw + rawDy * cosYaw; // "Length" axis of tool (Drag axis)
+
+                // toolDx is aligned with Motion Vector.
+                // toolDy is Perpendicular to Motion Vector.
+
                 let z = 0;
                 
                 if (type === 'screwdriver') {
-                    if (Math.abs(dx) > sizeMM/2) z = 999;
-                    else z = Math.abs(dx) > (sizeMM/2 - 0.2) ? (Math.abs(dx) - (sizeMM/2 - 0.2)) : 0;
+                    // Flat blade. Width is across the motion (perpendicular).
+                    // So we check toolDy (perpendicular) for width.
+                    if (Math.abs(toolDy) > sizeMM/2) z = 999;
+                    else z = Math.abs(toolDy) > (sizeMM/2 - 0.2) ? (Math.abs(toolDy) - (sizeMM/2 - 0.2)) : 0;
                     sharpness = 0.3;
                 } else if (type === 'knife') {
-                    z = Math.abs(dx) * 2; 
+                    // Blade aligned with motion? Or perpendicular (scraping)?
+                    // Usually knives cut ALONG the motion.
+                    // V-shape based on perpendicular distance (toolDy)
+                    z = Math.abs(toolDy) * 2; 
                     sharpness = 0.95;
                 } else if (type === 'crowbar') {
+                    // Round tip
                     const r = sizeMM / 2;
-                    const d = Math.sqrt(dx*dx);
+                    const d = Math.sqrt(toolDx*toolDx + toolDy*toolDy);
                     if (d > r) z = 999;
                     else z = r - Math.sqrt(r*r - d*d);
                     sharpness = 0.1;
                 } else if (type === 'hammer_face') {
-                    // Large flat circle with beveled edge
-                    // sizeMM is diameter
                     const r = sizeMM / 2;
-                    const dist = Math.sqrt(dx*dx + dy*dy);
-                    if (dist > r) z = 999;
-                    else if (dist > r * 0.8) z = (dist - r * 0.8); // Bevel
-                    else z = 0; // Flat face
-                    sharpness = 0.05; // Very blunt
+                    const d = Math.sqrt(toolDx*toolDx + toolDy*toolDy);
+                    if (d > r) z = 999;
+                    else if (d > r * 0.8) z = (d - r * 0.8);
+                    else z = 0;
+                    sharpness = 0.05;
                 } else if (type === 'hammer_claw') {
-                    // Two wedges separated by gap
-                    // Claw curve in Y direction
-                    const clawWidth = sizeMM * 0.4; // width of total assembly
+                    // Claws aligned with motion
+                    const clawWidth = sizeMM * 0.4;
                     const gap = sizeMM * 0.15;
                     
-                    if (Math.abs(dx) < gap) {
-                        z = 999; // Gap
-                    } else if (Math.abs(dx) > clawWidth) {
-                        z = 999; // Outside
+                    if (Math.abs(toolDy) < gap) { // Perpendicular axis
+                        z = 999;
+                    } else if (Math.abs(toolDy) > clawWidth) {
+                        z = 999;
                     } else {
-                        // The claw prongs
-                        // Tapered points
-                        // Base shape is curved wedge
                         const prongCenter = gap + (clawWidth - gap)/2;
-                        const localDx = Math.abs(Math.abs(dx) - prongCenter);
-                        
-                        // Sharpness of the claw tip
-                        z = localDx * 1.5; 
-                        
-                        // Curve along Y (hook shape)
-                        const curveY = (dy * dy) * 0.2;
-                        z += curveY;
+                        const localP = Math.abs(Math.abs(toolDy) - prongCenter);
+                        z = localP * 1.5; 
+                        // Curve along Length (toolDx)
+                        const curve = (toolDx * toolDx) * 0.2;
+                        z += curve;
                     }
                     sharpness = 0.6;
                 }
 
-                const tiltSlope = Math.tan((90 - angleDeg) * Math.PI / 180);
-                z += dy * tiltSlope;
+                // 3. Apply Angle of Attack Tilt
+                z += -toolDx * tiltSlope; // Tilt along the drag axis
 
-                const microNoise = Math.sin(dx * 50) * 0.01 + Math.sin(dx * 120) * 0.005;
+                const microNoise = Math.sin(toolDy * 50) * 0.01 + Math.sin(toolDy * 120) * 0.005;
                 const damage = (Math.random() > 0.95 ? -1 : 1) * Math.random() * wearMag;
                 
-                if (z < 10) {
-                     kernel[idx] = z + microNoise + (damage * 0.1);
+                // Temporarily store potentially valid Z. 
+                // We don't clamp with 999 yet, we need to find minZ of the SHAPE first.
+                // But we must distinguish "Outside Shape" from "Deep Shape".
+                // We use the shape logic result (if z was set to 999 above, it stays 999)
+                
+                if (z < 500) { // If it was a valid point (not 999)
+                    kernel[idx] = z + microNoise + (damage * 0.1);
                 } else {
-                     kernel[idx] = 999;
+                    kernel[idx] = 999;
+                }
+            }
+        }
+
+        // CORRECTION: Normalize Z
+        // Find the lowest point (minimum Z) in the kernel (that is not 999)
+        // Shift kernel so that minZ = 0.
+        // This ensures the "contact point" is what determines depth, not the tool center.
+        let minZ = 1000;
+        for(let i=0; i<kernel.length; i++) {
+            if (kernel[i] < minZ) minZ = kernel[i];
+        }
+        
+        // If valid tool found
+        if (minZ < 500) {
+            for(let i=0; i<kernel.length; i++) {
+                if (kernel[i] < 500) {
+                    kernel[i] -= minZ; // Shift up. Now lowest point is 0.
                 }
             }
         }
