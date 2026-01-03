@@ -93,7 +93,7 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
     }
   }, [simState.isResetting]);
 
-  const runSimulation = () => {
+  const runSimulation = async () => {
     if (!meshRef.current) return;
 
     // 1. Create Tool Kernel
@@ -110,10 +110,9 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
         simState.angle
     );
 
-    // 2. Execute Physics Loop
-    // Start slightly off-center left
-    engine.simulateCut(
-        10, 30, // Start X, Y (mm)
+    // 2. Execute Physics Loop (Generator Pattern)
+    const generator = engine.simulateCutGenerator(
+        10, 30, // Start X, Y
         simState.direction, 
         simState.force,
         kernel,
@@ -122,8 +121,22 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
         simState.chatter
     );
 
-    // 3. Update Mesh
+    // Iterate through generator to allow UI updates
+    for (const progress of generator) {
+        if (setSimState) {
+            setSimState(prev => ({ ...prev, progress }));
+        }
+        // Yield to event loop to let React render progress bar
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    // 3. Update Mesh at the end
     updateMeshFromEngine();
+    
+    // Reset simulation flag
+    if (setSimState) {
+        setSimState(prev => ({ ...prev, isSimulating: false, progress: 100 }));
+    }
   };
 
   const updateMeshFromEngine = () => {
