@@ -48,13 +48,21 @@ function App() {
     chatter: 0.2,
     toolWear: 0.1,
     material: 'aluminum',
+    viewMode: 'standard',
+    rakingLightAngle: 10,
+    showScales: true,
     isSimulating: false,
+    isResetting: false,
   });
 
   const handleExecute = () => {
     setSimState(prev => ({ ...prev, isSimulating: true }));
-    // Reset simulation flag after a short delay or handle inside the component
     setTimeout(() => setSimState(prev => ({ ...prev, isSimulating: false })), 100);
+  };
+
+  const handleReset = () => {
+    setSimState(prev => ({ ...prev, isResetting: true }));
+    setTimeout(() => setSimState(prev => ({ ...prev, isResetting: false })), 100);
   };
 
   return (

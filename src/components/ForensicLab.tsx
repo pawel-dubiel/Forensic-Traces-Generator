@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Environment, Grid } from '@react-three/drei';
+import { OrbitControls, Environment, Grid, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SimulationState } from '../App';
 import { ForensicPhysicsEngine } from '../utils/SimulationEngine';
@@ -11,13 +11,61 @@ interface LabProps {
 
 // Resolution Settings
 // 60mm plate size. 
-// 10 pts/mm = 600x600 = 360k verts. (Playable)
-// 20 pts/mm = 1200x1200 = 1.44M verts. (Heavy but "Speed doesn't matter")
-// Let's go with 15 pts/mm for a balance of detail and browser crash safety (900x900 ~800k verts)
-const RESOLUTION = 15; 
+// 15 pts/mm = 900x900 = 810k verts (Medium)
+// 30 pts/mm = 1800x1800 = 3.24M verts (High Fidelity - Forensically Accurate)
+const RESOLUTION = 30; 
 const WIDTH_MM = 60;
 const HEIGHT_MM = 60;
 const SEGMENTS = Math.floor(WIDTH_MM * RESOLUTION);
+
+const ForensicScaleBar: React.FC<{ position?: [number, number, number], rotation?: [number, number, number] }> = ({ position, rotation }) => {
+    // ABFO-style L-ruler
+    // 20mm x 20mm scale
+    const size = 20; 
+    const thick = 0.5;
+
+    return (
+        <group position={position || [-WIDTH_MM/2 + 2, -HEIGHT_MM/2 + 2, 0.1]} rotation={rotation || [0,0,0]}>
+            {/* L-Shape Body */}
+            <mesh position={[size/2, -thick/2, 0]}>
+                <boxGeometry args={[size, thick, 0.1]} />
+                <meshBasicMaterial color="white" />
+            </mesh>
+            <mesh position={[-thick/2, size/2, 0]}>
+                <boxGeometry args={[thick, size, 0.1]} />
+                <meshBasicMaterial color="white" />
+            </mesh>
+
+            {/* Ticks X Axis */}
+            {Array.from({length: size}).map((_, i) => (
+                <group key={`x-${i}`} position={[i, 0, 0.06]}>
+                     <mesh position={[0, -thick/2, 0]}>
+                        <planeGeometry args={[0.2, i % 5 === 0 ? thick : thick/2]} />
+                        <meshBasicMaterial color="black" />
+                     </mesh>
+                </group>
+            ))}
+            
+            {/* Ticks Y Axis */}
+            {Array.from({length: size}).map((_, i) => (
+                <group key={`y-${i}`} position={[0, i, 0.06]}>
+                     <mesh position={[-thick/2, 0, 0]} rotation={[0,0,Math.PI/2]}>
+                        <planeGeometry args={[0.2, i % 5 === 0 ? thick : thick/2]} />
+                        <meshBasicMaterial color="black" />
+                     </mesh>
+                </group>
+            ))}
+
+            {/* Labels */}
+            <Text position={[10, -2, 0]} fontSize={2} color="white" anchorX="center" anchorY="top">
+                10mm
+            </Text>
+            <Text position={[-2, 10, 0]} fontSize={2} color="white" rotation={[0,0,Math.PI/2]} anchorX="center" anchorY="bottom">
+                10mm
+            </Text>
+        </group>
+    );
+};
 
 const MaterialSurface: React.FC<{ simState: SimulationState }> = ({ simState }) => {
   const meshRef = useRef<THREE.Mesh>(null);
@@ -69,24 +117,46 @@ const MaterialSurface: React.FC<{ simState: SimulationState }> = ({ simState }) 
     const geometry = meshRef.current.geometry;
     const positions = geometry.attributes.position;
     
-    // Engine data is Z heights [y*w + x]
-    // PlaneGeometry is row-major?
-    // PlaneGeometry creates (seg+1)*(seg+1) vertices.
+    // Check/Init colors attribute if needed for Heatmap
+    if (!geometry.attributes.color) {
+        geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(positions.count * 3), 3));
+    }
+    const colors = geometry.attributes.color;
+
     const engineData = engine.surface.data;
     
+    // Fast pass if needed, or fixed scale (-2mm to +2mm)
+    // Let's use fixed scale for consistency: Blue = -1mm, Green = 0, Red = +1mm
+    
     for (let i = 0; i < positions.count; i++) {
-        // PlaneGeo is centered at 0,0. Engine is 0..W, 0..H.
-        // We need to map correctly. 
-        // Ideally we just map the Z values directly if dimensions match.
-        // PlaneGeometry vertices are ordered row by row.
-        
-        // Safety check
         if (i < engineData.length) {
-            positions.setZ(i, engineData[i]);
+            const z = engineData[i];
+            positions.setZ(i, z);
+            
+            // Heatmap Coloring
+            // Map Z to RGB
+            // Deep (negative) = Blue, High (positive/pileup) = Red, Zero = Green/Grey
+            // Scale: +/- 0.5mm range
+            const t = Math.max(-1, Math.min(1, z / 0.5)); // -1 to 1
+            
+            let r=0, g=0, b=0;
+            if (t < 0) {
+                // Negative: Green (0) to Blue (-1)
+                g = 1 + t; // 1 to 0
+                b = -t;    // 0 to 1
+                r = 0;
+            } else {
+                // Positive: Green (0) to Red (1)
+                g = 1 - t; // 1 to 0
+                r = t;     // 0 to 1
+                b = 0;
+            }
+            colors.setXYZ(i, r, g, b);
         }
     }
 
     positions.needsUpdate = true;
+    colors.needsUpdate = true;
     geometry.computeVertexNormals();
   };
 
@@ -103,13 +173,27 @@ const MaterialSurface: React.FC<{ simState: SimulationState }> = ({ simState }) 
   return (
     <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} receiveShadow castShadow>
       <planeGeometry args={[WIDTH_MM, HEIGHT_MM, SEGMENTS-1, SEGMENTS-1]} />
-      <meshStandardMaterial 
-        color={materialColor} 
-        roughness={simState.material === 'wood' ? 0.9 : 0.4} 
-        metalness={simState.material === 'wood' ? 0.0 : 0.8}
-        side={THREE.DoubleSide}
-        flatShading={false}
-      />
+      
+      {simState.viewMode === 'standard' && (
+          <meshStandardMaterial 
+            color={materialColor} 
+            roughness={simState.material === 'wood' ? 0.9 : 0.4} 
+            metalness={simState.material === 'wood' ? 0.0 : 0.8}
+            side={THREE.DoubleSide}
+            flatShading={false}
+          />
+      )}
+
+      {simState.viewMode === 'heatmap' && (
+          <meshBasicMaterial 
+            vertexColors={true}
+            side={THREE.DoubleSide}
+          />
+      )}
+
+      {simState.viewMode === 'normal' && (
+          <meshNormalMaterial side={THREE.DoubleSide} />
+      )}
     </mesh>
   );
 };
@@ -138,20 +222,52 @@ const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) =
 };
 
 const ForensicLab: React.FC<LabProps> = ({ simState }) => {
+  // Calculate light pos for main scene component too if needed, or just pass state down?
+  // Actually, we can just render the light here.
+  
+  const rRad = simState.rakingLightAngle * Math.PI / 180;
+  const lightH = 50 * Math.sin(rRad); // Height from surface (Y)
+  const lightDist = 50 * Math.cos(rRad); // Distance laterally (X)
+
   return (
-    <Canvas shadows dpr={[1, 2]} camera={{ position: [0, -40, 50], fov: 45 }}>
+    <Canvas shadows dpr={[1, 2]} camera={{ position: [0, 40, 40], fov: 45 }}>
       <color attach="background" args={['#050505']} />
       
-      <ambientLight intensity={0.2} />
-      {/* High contrast lighting for striations */}
-      <spotLight position={[30, 30, 40]} angle={0.2} penumbra={0.5} intensity={1} castShadow shadow-mapSize={[2048, 2048]} />
-      <pointLight position={[-20, -20, 10]} intensity={0.3} color="#00e5ff" />
+      <ambientLight intensity={0.1} />
+      
+      {/* RAKING LIGHT */}
+      <spotLight 
+        position={[lightDist, lightH, 0]} 
+        target-position={[0, 0, 0]}
+        angle={0.5} 
+        penumbra={0.5} 
+        intensity={2.0} 
+        castShadow 
+        shadow-mapSize={[2048, 2048]} 
+        shadow-bias={-0.0001}
+      />
+
+      <pointLight position={[-20, 20, -20]} intensity={0.2} color="#00e5ff" />
       
       <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.5} />
       
       <group position={[0, 0, 0]}>
         <MaterialSurface simState={simState} />
-        <Grid infiniteGrid fadeDistance={60} sectionColor="#00e5ff" cellColor="#1a1a1a" position={[0,0,-0.1]} />
+        
+        {simState.showScales && (
+            <>
+                {/* Surface Scale (Bottom Left) */}
+                <ForensicScaleBar position={[-WIDTH_MM/2 + 2, -HEIGHT_MM/2 + 2, 0.1]} />
+                
+                {/* Floating Scale (Top Right, hovering) */}
+                <ForensicScaleBar 
+                    position={[WIDTH_MM/2 - 2, HEIGHT_MM/2 - 2, 15]} 
+                    rotation={[0, 0, Math.PI]} // Rotated 180 to face center
+                />
+            </>
+        )}
+
+        <Grid infiniteGrid fadeDistance={60} sectionColor="#00e5ff" cellColor="#1a1a1a" position={[0,-0.1,0]} />
         <ToolVisualizer simState={simState} />
       </group>
       

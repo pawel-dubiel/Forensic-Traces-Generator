@@ -1,15 +1,16 @@
 import React from 'react';
-import { Box, Typography, Slider, MenuItem, Select, FormControl, InputLabel, Button, Divider } from '@mui/material';
+import { Box, Typography, Slider, MenuItem, Select, FormControl, InputLabel, Button, Divider, FormControlLabel, Checkbox } from '@mui/material';
 import type { SimulationState } from '../App';
-import { PlayCircle } from 'lucide-react';
+import { PlayCircle, Trash2 } from 'lucide-react';
 
 interface ControlsProps {
   simState: SimulationState;
   setSimState: React.Dispatch<React.SetStateAction<SimulationState>>;
   onExecute: () => void;
+  onReset: () => void;
 }
 
-const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute }) => {
+const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, onReset }) => {
   
   const handleChange = (key: keyof SimulationState, value: any) => {
     setSimState(prev => ({ ...prev, [key]: value }));
@@ -129,8 +130,50 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute })
           <MenuItem value="brass">Brass (Medium)</MenuItem>
           <MenuItem value="steel">Steel (Hard)</MenuItem>
           <MenuItem value="wood">Wood (Very Soft)</MenuItem>
+          <MenuItem value="gold">Gold (Soft Precious)</MenuItem>
         </Select>
       </FormControl>
+
+      <Divider sx={{ my: 3 }} />
+
+      <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 2 }}>
+        Forensic Visualization
+      </Typography>
+
+      <Box sx={{ mt: 2, mb: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <FormControl fullWidth size="small">
+          <InputLabel>View Mode</InputLabel>
+          <Select
+            value={simState.viewMode}
+            label="View Mode"
+            onChange={(e) => handleChange('viewMode', e.target.value)}
+          >
+            <MenuItem value="standard">Standard (Material)</MenuItem>
+            <MenuItem value="heatmap">Depth Heatmap (False Color)</MenuItem>
+            <MenuItem value="normal">Normal Map (Slope)</MenuItem>
+          </Select>
+        </FormControl>
+
+        <Box>
+           <Typography gutterBottom variant="body2">Raking Light Angle ({simState.rakingLightAngle}°)</Typography>
+           <Slider
+            value={simState.rakingLightAngle}
+            onChange={(_, val) => handleChange('rakingLightAngle', val)}
+            min={0} max={90}
+            valueLabelDisplay="auto"
+          />
+        </Box>
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={simState.showScales}
+              onChange={(e) => handleChange('showScales', e.target.checked)}
+            />
+          }
+          label="Show Scale Bars"
+        />
+      </Box>
 
       <Button 
         variant="contained" 
