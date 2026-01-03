@@ -59,3 +59,21 @@ For brittle materials, the simulator switches from plastic flow to fracture logi
 2.  **Run:** `npm run dev`
 3.  **Controls:** Use the sidebar to set Tool, Material, and Physics parameters.
 4.  **Execute:** Click **EXECUTE SIMULATION** and wait for the physics engine to compute the interaction.
+
+
+## Notes
+
+  The underlying physics engine is a Discrete Heightfield Solver (similar to how terrain is handled in advanced simulations). This means it is "Shape Agnostic."
+
+  Why it handles ANY shape:
+   1. Pixel-by-Pixel Physics: The engine doesn't know what a "screwdriver" or "knife" is. It only sees a grid of 2,500+ Z-height points (the Kernel).
+   2. Arbitrary Geometry: You could feed it a star shape, a serrated key, a footprint, or a 3D scan of a specific broken tool tip. As long as you can convert that shape into a grid of
+      numbers (a height map), the physics engine will correctly calculate:
+       * The contact patch (which pixels touch).
+       * The variable depth (some parts cutting deep, others skimming).
+       * The pile-up (material flowing around the complex perimeter).
+
+  The Only Limitation (2.5D vs True 3D)
+  Because it uses a Heightfield (like a topographical map), it cannot simulate Undercuts (overhangs).
+   * Can Do: A complex drill bit, a serrated steak knife, a file with cross-hatching.
+   * Cannot Do: A fishing hook getting snagged underneath a lip of metal (because the map only sees the "top" surface).
