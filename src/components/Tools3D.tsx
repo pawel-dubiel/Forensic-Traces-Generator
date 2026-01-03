@@ -73,13 +73,16 @@ export const CrowbarModel: React.FC = () => {
 export const HammerFaceModel: React.FC = () => {
     return (
         <group rotation={[0, 0, 0]}>
-             <mesh position={[0, 20, 0]} rotation={[0, 0, Math.PI/2]} material={steelMaterial}>
+             <mesh position={[0, 25, 0]} rotation={[0, 0, Math.PI/2]} material={steelMaterial}>
                 <cylinderGeometry args={[15, 15, 100, 16]} />
              </mesh>
-             <mesh position={[0, 0, 0]} rotation={[Math.PI/2, 0, 0]} material={steelMaterial}>
+             {/* Face Plate - Shifted so surface is at 0 */}
+             {/* Cylinder height 10. Center was 0. Surface was -5. Move to +5. */}
+             <mesh position={[0, 5, 0]} rotation={[Math.PI/2, 0, 0]} material={steelMaterial}>
                  <cylinderGeometry args={[12.5, 14, 10, 32]} />
              </mesh>
-             <mesh position={[0, 20, 50]} rotation={[Math.PI/2, 0, 0]} material={woodHandleMaterial}>
+             
+             <mesh position={[0, 25, 50]} rotation={[Math.PI/2, 0, 0]} material={woodHandleMaterial}>
                 <cylinderGeometry args={[10, 12, 300, 16]} />
              </mesh>
         </group>

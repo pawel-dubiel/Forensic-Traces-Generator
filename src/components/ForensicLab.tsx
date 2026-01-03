@@ -241,8 +241,33 @@ const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) =
     });
 
     const dirRad = (simState.direction * Math.PI) / 180;
-    const yawRad = Math.PI / 2 - dirRad;
+    
+    // Rotation Logic:
+    // 1. Yaw: Align Physics X (0 deg) with Tool Z (Default).
+    // Physics +X = Right. Tool +Z = Back (or Forward depending on cam).
+    // We need standard Compass rotation.
+    // Let's use: yaw = -dirRad (Clockwise from X). And offset by -PI/2 to align Model Z to X.
+    const yawRad = -dirRad - Math.PI/2;
+    
+    // 2. Pitch: Tilt "Back" (Handle Up).
+    // Positive Angle = Tilt Back. 
+    // Rotation around X axis. Positive rotation lifts Y+ -> Z+.
+    // If Tool points Z, handle is Z+. Tip is Z-.
+    // Wait, Screwdriver points +Y in definition, rotated +90 X.
+    // So it points +Z?
+    // Let's assume Pitch = -angle.
     const pitchRad = -(simState.angle * Math.PI) / 180;
+
+    // Map Physics Start (10, 30) to World Coordinates
+    // Physics: 0..60. World: -30..+30 centered.
+    // PhysX=10 -> WorldX = 10 - 30 = -20
+    // PhysY=30 -> WorldY(on plate) = 30 - 30 = 0.
+    // Plate is rotated -90 X. So Plate Y+ becomes World Z-.
+    // WorldZ = - (PhysY - 30) = - (30 - 30) = 0.
+    
+    // Start Position
+    const startX = 10 - 30;
+    const startZ = -(30 - 30); // 0
 
     // Which model to render?
     const renderTool = () => {
@@ -258,14 +283,17 @@ const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) =
     };
 
     return (
-        // Physics Engine 0 deg = +X (Right).
-        // Tool models point along +Z; yaw maps +Z -> +X.
-        <group ref={groupRef} position={[0, 0, 5]} rotation={[0, yawRad, 0]}> 
-            {/* Angle of attack is a pitch (tilt into the surface) */}
+        // Position y=2 (Hover above surface). X/Z matched to start point.
+        <group ref={groupRef} position={[startX, 2, startZ]} rotation={[0, yawRad, 0]}> 
+            
             <group rotation={[pitchRad, 0, 0]}>
                 {renderTool()}
-                {/* Force Vector Arrow */}
-                <arrowHelper args={[new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 0), 30, 0xff0000]} />
+                
+                {/* Force Vector Arrow: Aligned with Tool Shaft (Local Z) */}
+                {/* Points towards TIP (Contact Point) which is usually Z- or Z+ depending on model? */}
+                {/* Models are Z-aligned. Handle is Z+. Tip is 0. */}
+                {/* Vector (0,0,-1) points towards origin/tip. */}
+                <arrowHelper args={[new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 30, 0), 40, 0xff0000]} />
             </group>
         </group>
     );
