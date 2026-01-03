@@ -1,48 +1,42 @@
 # Forensic Tool Mark Simulator
 
 ## Introduction
-The **Forensic Tool Mark Simulator** is a high-fidelity scientific application designed to reconstruct and visualize the microscopic interactions between tools and material surfaces. It acts as a "virtual lab bench," allowing examiners to simulate scratches, gouges, and impacts without the need for destructive physical testing.
+The **Forensic Tool Mark Simulator** is a high-fidelity scientific application designed to reconstruct and visualize the microscopic physical interactions between tools and material surfaces. It acts as a "virtual lab bench," allowing examiners to simulate scratches, gouges, and impacts under controlled variables.
 
-The core of this project is a **Physics Engine** that simulates how different metals behave when stressed. It doesn't just "draw" lines; it calculates how the material yields, flows, or breaks under pressure.
+Unlike standard 3D modeling software, this application is driven by a **Discrete Element Physics Engine** (running in 64-bit precision) that calculates material yield, plastic flow, fracture mechanics, and dynamic friction in real-time.
 
 ---
 
-## 🔬 The Physics: Explained for Laymen
+## 🔬 Physics Engine Mechanics
 
-Imagine pressing a knife into a stick of butter versus a block of wood. The physics engine handles these differences using real Material Science principles.
+The simulation is built upon several core pillars of material science and forensic physics.
 
-### 1. Hardness & Penetration (Meyer's Law)
-**"How deep does it cut?"**
-*   **The Concept:** Hardness is a material's resistance to being dented.
-*   **In Simulation:** We use **Meyer's Law**.
-    *   **Sharp Tools (Knife):** Behave like a needle. They concentrate all force onto a tiny point, allowing them to penetrate deep with very little effort ($Depth \propto \sqrt{Force}$).
-    *   **Blunt Tools (Hammer):** Behave like a stamp. They spread the force over a wide area, requiring massive effort to make even a shallow dent ($Depth \propto Force$).
-*   **Example:** 50N of force with a Knife will slice deep into Aluminum. 50N with a Hammer will barely scratch it.
+### 1. Contact Mechanics & Plastic Deformation
+The engine models the physical displacement of material when subjected to stress beyond its yield point.
+*   **Depth & Contact Patch:** Penetration depth is calculated using **Meyer’s Law**, which differentiates between the high stress concentration of sharp tools (knives) versus the distributed load of blunt tools (hammers). The contact patch shape is dynamically generated based on the tool's 3D geometry and its angle of attack relative to the surface.
+*   **Plastic Flow & Pile-up:** In ductile materials like Gold or Aluminum, material is not destroyed; it flows. The simulator strictly enforces **conservation of volume**, meaning the material displaced from the groove is redistributed to the edges, creating realistic "lips" or pile-up ridges characteristic of soft metals.
+*   **Elastic Recovery:** The system accounts for "springback"—the tendency of elastic materials to recover slightly after the cutting force is removed, affecting the final depth measurement.
 
-### 2. Plasticity vs. Brittleness
-**"Does it flow or does it snap?"**
-*   **Ductile Materials (Gold, Aluminum, Brass):**
-    *   Think of **Modeling Clay**. When you push your finger into it, the clay doesn't disappear; it squishes out to the sides, forming raised "lips" or ridges.
-    *   **Simulation:** The engine uses **Volume Conservation**. It calculates exactly how much material the tool displaced and piles it up on the edges of the cut. Gold "flows" the most, creating high ridges.
-*   **Brittle Materials (Wood, Hardened Steel):**
-    *   Think of **Dry Toast** or **Glass**. When you scratch it, it crumbles, chips, or snaps. It doesn't squish.
-    *   **Simulation:** The engine calculates a "Chip Ratio". If the material is brittle, the simulated tool "tears" chunks out of the surface (deleting them) instead of piling them up.
+### 2. Microscopic Striation Modeling
+Tool marks are rarely smooth; they contain a unique signature of parallel lines (striations) caused by imperfections in the tool edge.
+*   **Edge Micro-Geometry:** The simulator procedurally generates a unique "fingerprint" for the tool edge, simulating manufacturing grinding marks and irregularities.
+*   **Wear & Damage:** The **Wear** parameter introduces stochastic chips, nicks, and dull spots along the blade. As these imperfections drag through the material, they leave distinct, matching striations in the trench, which are critical for forensic matching.
 
-### 3. Fracture Mechanics
-**"When does it crack?"**
-*   **The Concept:** If you push a brittle material too hard, the stress has nowhere to go, so it shoots out cracks.
-*   **In Simulation:** If you drag a tool deep into **Wood** or **Hardened Steel**, the engine runs a "lightning bolt" algorithm. It generates random branching cracks that shoot out sideways from the main cut, mimicking real-world fracture patterns.
+### 3. Surface Topography Synthesis
+Real surfaces are never perfectly flat. The engine synthesizes a realistic base topology before the tool even touches the surface.
+*   **Anisotropic Roughness:** Simulates manufacturing finishes (like brushed metal) by generating directional grain noise.
+*   **Stochastic Pits:** Randomly distributes microscopic defects and pits across the surface, providing landmark features that help provide scale and realism to the macroscopic tool mark.
 
-### 4. Chatter (Stick-Slip Friction)
-**"Why is the scratch wavy?"**
-*   **The Concept:** Have you ever dragged a sneaker across a gym floor and heard it squeak? That's **Stick-Slip**. The tool "sticks" to the metal, builds up tension, and then "slips" forward, vibrating like a guitar string.
-*   **In Simulation:** We simulate this vibration frequency (approx. 20Hz).
-    *   **Speed Matters:** If you drag **Slowly**, the ripples are packed tight together. If you drag **Fast**, the ripples stretch out. Forensic examiners use this to estimate how fast a suspect swiped a tool.
+### 4. Stick-Slip Dynamics & Stability
+The interaction between tool and surface is dynamic, not static.
+*   **Stick-Slip (Chatter):** As a tool moves, friction causes it to momentarily stick to the material, build tension, and then slip forward. This cycle creates a harmonic vibration known as "chatter."
+*   **Speed Dependency:** The simulator couples this vibration to the **Speed** control. Following the wave equation, faster tool speeds elongate the wavelength of these chatter marks, allowing examiners to infer the velocity of the original tool application.
+*   **Hand Tremor:** Subtle randomized movements are superimposed on the trajectory to simulate human instability during the cut.
 
-### 5. Micro-Striations (The "Fingerprint")
-**"No two tools are alike."**
-*   **The Concept:** Even a brand-new screwdriver has microscopic jagged edges from the factory grinder. As it wears down, it gets nicks and chips.
-*   **In Simulation:** We generate a unique random "signature" for the tool edge. This signature carves parallel lines (striations) inside the main groove. Increasing the **Wear** slider makes these lines messier and more unique, just like a damaged tool.
+### 5. Fracture Mechanics
+For brittle materials, the simulator switches from plastic flow to fracture logic.
+*   **Chip Formation:** In materials like Wood or Hardened Steel, high stress causes chunks of material to tear away (chip detachment) rather than flow, leaving a roughened, jagged trench floor.
+*   **Crack Propagation:** High-force impact events trigger a branching algorithm that shoots randomized cracks outward from the impact site, simulating the brittle failure of the material structure.
 
 ---
 
@@ -51,15 +45,17 @@ Imagine pressing a knife into a stick of butter versus a block of wood. The phys
 ### Tool Lab
 *   **Tools:** Screwdriver, Knife, Crowbar, Hammer (Face & Claw).
 *   **Materials:** Gold (Soft/Ductile), Aluminum, Brass, Steel, Wood (Brittle).
+*   **3D Tool Visualization:** Real-time 3D representation of the tool geometry, orienting itself to match your Angle and Direction settings.
 
-### Forensic Visualization ("CSI Mode")
-*   **Raking Light:** Move a light source to grazing angles (0-5°) to reveal shadows in microscopic scratches.
-*   **Depth Heatmap:** False-color view (Blue=Deep, Red=High).
-*   **Scale Bars:** ABFO-style rulers for measuring traces.
+### Forensic Visualization Suite
+*   **Raking Light:** A movable light source (0-90°) to cast long shadows. Set to **0-5°** to reveal microscopic topography invisible under direct light.
+*   **Depth Heatmap:** False-color view (Blue=Deep, Red=High) for quantitative depth analysis.
+*   **Normal Map:** Visualizes surface slope to isolate texture from color.
+*   **Scale Bars:** ABFO-style rulers (Surface & HUD) for measuring trace dimensions.
 
 ## Installation & Usage
 
 1.  **Install:** `npm install`
 2.  **Run:** `npm run dev`
 3.  **Controls:** Use the sidebar to set Tool, Material, and Physics parameters.
-4.  **Execute:** Click **EXECUTE SIMULATION** and wait for the physics engine to compute the interaction (progress bar included).
+4.  **Execute:** Click **EXECUTE SIMULATION** and wait for the physics engine to compute the interaction.
