@@ -7,7 +7,7 @@ Unlike standard 3D modeling software, this application is driven by a **Discrete
 
 ---
 
-## 🔬 Physics Engine Mechanics
+## Physics Engine Mechanics
 
 The simulation is built upon several core pillars of material science and forensic physics.
 
@@ -40,7 +40,7 @@ For brittle materials, the simulator switches from plastic flow to fracture logi
 
 ---
 
-## 🛠 Features
+## Features
 
 ### Tool Lab
 *   **Tools:** Screwdriver, Knife, Crowbar, Hammer (Face & Claw).
