@@ -187,6 +187,16 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           }
           label="Show 3D Tool"
         />
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={simState.loopGhost}
+              onChange={(e) => handleChange('loopGhost', e.target.checked)}
+            />
+          }
+          label="Loop Ghost Playback"
+        />
       </Box>
 
       <Button 

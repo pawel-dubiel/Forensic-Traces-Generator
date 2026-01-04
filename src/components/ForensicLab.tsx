@@ -1,9 +1,10 @@
-import React, { useMemo, useRef, useEffect } from 'react';
+import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Environment, Grid, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SimulationState } from '../App';
 import { ForensicPhysicsEngine } from '../utils/SimulationEngine';
+import type { ToolPathPoint } from '../utils/SimulationEngine';
 import { ScrewdriverModel, KnifeModel, CrowbarModel, HammerFaceModel, HammerClawModel, SpoonModel } from './Tools3D';
 import { createSeededRandom, deriveSeed } from '../utils/random';
 
@@ -70,7 +71,11 @@ const ForensicScaleBar: React.FC<{ position?: [number, number, number], rotation
     );
 };
 
-const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React.Dispatch<React.SetStateAction<SimulationState>> }> = ({ simState, setSimState }) => {
+const MaterialSurface: React.FC<{
+  simState: SimulationState;
+  setSimState?: React.Dispatch<React.SetStateAction<SimulationState>>;
+  onToolPathUpdate?: (path: ToolPathPoint[]) => void;
+}> = ({ simState, setSimState, onToolPathUpdate }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   
   // Initialize Engine
@@ -95,11 +100,17 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
     if (simState.isResetting) {
         engine.reset();
         updateMeshFromEngine();
+        if (onToolPathUpdate) {
+          onToolPathUpdate([]);
+        }
     }
   }, [simState.isResetting]);
 
   const runSimulation = async () => {
     if (!meshRef.current) return;
+    if (onToolPathUpdate) {
+      onToolPathUpdate([]);
+    }
 
     // 1. Create Tool Kernel
     let toolSize = 6;
@@ -147,6 +158,9 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
 
     // 3. Update Mesh at the end
     updateMeshFromEngine();
+    if (onToolPathUpdate) {
+      onToolPathUpdate(engine.getToolPath());
+    }
     
     // Reset simulation flag
     if (setSimState) {
@@ -241,15 +255,78 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
   );
 };
 
-const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) => {
+const ToolVisualizer: React.FC<{ simState: SimulationState; toolPath: ToolPathPoint[] }> = ({
+  simState,
+  toolPath
+}) => {
     const groupRef = useRef<THREE.Group>(null);
-    
+    const playbackRef = useRef({ startTime: 0, index: 0, lastElapsed: 0 });
+
+    // Map Physics Start (10, 30) to World Coordinates
+    // Physics: 0..60. World: -30..+30 centered.
+    const startX = 10 - 30;
+    const startZ = 30 - 30; // 0
+
     // Hover animation
+    useEffect(() => {
+        playbackRef.current = { startTime: 0, index: 0, lastElapsed: 0 };
+    }, [toolPath, simState.isSimulating, simState.direction, simState.angle, simState.loopGhost]);
+
     useFrame((state) => {
-        if (groupRef.current) {
-            // Hover slightly (2mm) + breathe
-            groupRef.current.position.z = 2 + Math.sin(state.clock.elapsedTime * 2) * 0.5;
+        if (!groupRef.current) return;
+
+        if (toolPath.length < 2 || simState.isSimulating) {
+            const hoverY = 2 + Math.sin(state.clock.elapsedTime * 2) * 0.5;
+            groupRef.current.position.set(startX, hoverY, startZ);
+            return;
         }
+
+        const duration = toolPath[toolPath.length - 1].time;
+        if (!Number.isFinite(duration) || duration <= 0) {
+            throw new Error('toolPath duration must be a positive finite number');
+        }
+
+        if (playbackRef.current.startTime === 0) {
+            playbackRef.current.startTime = state.clock.elapsedTime;
+            playbackRef.current.index = 0;
+            playbackRef.current.lastElapsed = 0;
+        }
+
+        const rawElapsed = state.clock.elapsedTime - playbackRef.current.startTime;
+        if (!simState.loopGhost && rawElapsed >= duration) {
+            const last = toolPath[toolPath.length - 1];
+            const worldX = last.x - WIDTH_MM / 2;
+            const worldZ = last.y - HEIGHT_MM / 2;
+            groupRef.current.position.set(worldX, last.toolZ, worldZ);
+            return;
+        }
+
+        const elapsed = simState.loopGhost ? rawElapsed % duration : rawElapsed;
+        let idx = playbackRef.current.index;
+
+        if (elapsed < playbackRef.current.lastElapsed) {
+            idx = 0;
+        }
+
+        while (idx < toolPath.length - 2 && toolPath[idx + 1].time < elapsed) {
+            idx += 1;
+        }
+        playbackRef.current.index = idx;
+        playbackRef.current.lastElapsed = elapsed;
+
+        const current = toolPath[idx];
+        const next = toolPath[idx + 1];
+        const span = next.time - current.time;
+        const t = span > 0 ? (elapsed - current.time) / span : 0;
+
+        const interpX = current.x + (next.x - current.x) * t;
+        const interpY = current.y + (next.y - current.y) * t;
+        const interpZ = current.toolZ + (next.toolZ - current.toolZ) * t;
+
+        const worldX = interpX - WIDTH_MM / 2;
+        const worldZ = interpY - HEIGHT_MM / 2;
+
+        groupRef.current.position.set(worldX, interpZ, worldZ);
     });
 
     const dirRad = (simState.direction * Math.PI) / 180;
@@ -269,17 +346,6 @@ const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) =
     // So it points +Z?
     // Let's assume Pitch = -angle.
     const pitchRad = -(simState.angle * Math.PI) / 180;
-
-    // Map Physics Start (10, 30) to World Coordinates
-    // Physics: 0..60. World: -30..+30 centered.
-    // PhysX=10 -> WorldX = 10 - 30 = -20
-    // PhysY=30 -> WorldY(on plate) = 30 - 30 = 0.
-    // Plate is rotated -90 X. So Plate Y+ becomes World Z-.
-    // WorldZ = - (PhysY - 30) = - (30 - 30) = 0.
-    
-    // Start Position
-    const startX = 10 - 30;
-    const startZ = -(30 - 30); // 0
 
     // Which model to render?
     const renderTool = () => {
@@ -314,6 +380,7 @@ const ToolVisualizer: React.FC<{ simState: SimulationState }> = ({ simState }) =
 const ForensicLab: React.FC<LabProps> = ({ simState, setSimState }) => {
   // Calculate light pos for main scene component too if needed, or just pass state down?
   // Actually, we can just render the light here.
+  const [toolPath, setToolPath] = useState<ToolPathPoint[]>([]);
   
   const rRad = simState.rakingLightAngle * Math.PI / 180;
   const lightH = 50 * Math.sin(rRad); // Height from surface (Y)
@@ -345,7 +412,7 @@ const ForensicLab: React.FC<LabProps> = ({ simState, setSimState }) => {
       <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.5} />
       
       <group position={[0, 0, 0]}>
-        <MaterialSurface simState={simState} setSimState={setSimState} />
+        <MaterialSurface simState={simState} setSimState={setSimState} onToolPathUpdate={setToolPath} />
         
         {simState.showScales && (
             <>
@@ -361,7 +428,7 @@ const ForensicLab: React.FC<LabProps> = ({ simState, setSimState }) => {
         )}
 
         <Grid infiniteGrid fadeDistance={60} sectionColor="#00e5ff" cellColor="#1a1a1a" position={[0,-0.1,0]} />
-        {simState.showTool && <ToolVisualizer simState={simState} />}
+        {simState.showTool && <ToolVisualizer simState={simState} toolPath={toolPath} />}
       </group>
       
       <Environment preset="studio" />

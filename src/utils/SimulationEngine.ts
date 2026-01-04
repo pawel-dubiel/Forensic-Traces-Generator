@@ -24,6 +24,13 @@ export interface ToolKernel {
     striationProfile: StriationProfile;
 }
 
+export interface ToolPathPoint {
+    x: number;
+    y: number;
+    toolZ: number;
+    time: number;
+}
+
 interface ContactPatchSample {
     depth: number;
     widthMm: number;
@@ -67,6 +74,7 @@ export class ForensicPhysicsEngine {
     private plasticStrain: Float32Array;
     private random!: () => number;
     private randomSeed: number;
+    private toolPath: ToolPathPoint[];
 
     constructor(widthMM: number, heightMM: number, resolution: number, randomSeed: number) {
         if (!Number.isFinite(randomSeed)) {
@@ -87,6 +95,7 @@ export class ForensicPhysicsEngine {
         this.plasticStrain = new Float32Array(w * h).fill(0);
         this.randomSeed = randomSeed;
         this.resetRandom();
+        this.toolPath = [];
         
         this.generateBaseTopography();
     }
@@ -111,6 +120,11 @@ export class ForensicPhysicsEngine {
         this.resetRandom();
         this.generateBaseTopography();
         this.plasticStrain.fill(0);
+        this.toolPath = [];
+    }
+
+    getToolPath(): ToolPathPoint[] {
+        return this.toolPath.slice();
     }
 
     private resetRandom() {
@@ -361,6 +375,11 @@ export class ForensicPhysicsEngine {
         const fractureThreshold = 0.5;
 
         let stepsTaken = 0;
+        let elapsedTime = 0;
+        const pathSampleStep = 0.25;
+        let lastSampleDist = -pathSampleStep;
+        this.toolPath = [];
+        this.toolPath.push({ x: cx, y: cy, toolZ: -penetration, time: 0 });
         
         // CORRECTION 2: Natural Frequency Chatter
         // Chatter is a temporal vibration (Hz).
@@ -396,6 +415,11 @@ export class ForensicPhysicsEngine {
                 }
             }
 
+            if (currentDist - lastSampleDist >= pathSampleStep) {
+                this.toolPath.push({ x: cx, y: cy, toolZ, time: elapsedTime });
+                lastSampleDist = currentDist;
+            }
+
             // 3. Move
             const tremor = (this.random() - 0.5) * 0.05;
             cx += (dirX * velocity * timeStep) + (-dirY * tremor);
@@ -403,6 +427,7 @@ export class ForensicPhysicsEngine {
             
             currentDist += velocity * timeStep;
             stepsTaken++;
+            elapsedTime += timeStep;
 
             // Yield every 500 steps (approx 10-20ms of work) to keep UI responsive
             if (stepsTaken % 500 === 0) {

@@ -18,6 +18,7 @@ export interface SimulationState {
   rakingLightAngle: number; // 0-90 degrees
   showScales: boolean;
   showTool: boolean;
+  loopGhost: boolean;
   randomSeed: number;
   progress: number; // 0-100
   isSimulating: boolean;
@@ -55,6 +56,7 @@ function App() {
     rakingLightAngle: 10,
     showScales: true,
     showTool: true,
+    loopGhost: false,
     randomSeed: 1337,
     progress: 0,
     isSimulating: false,

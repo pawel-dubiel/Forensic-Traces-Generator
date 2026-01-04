@@ -25,6 +25,7 @@ export class ForensicPhysicsEngine {
     plasticStrain;
     random;
     randomSeed;
+    toolPath;
     constructor(widthMM, heightMM, resolution, randomSeed) {
         if (!Number.isFinite(randomSeed)) {
             throw new Error('randomSeed must be a finite number');
@@ -43,6 +44,7 @@ export class ForensicPhysicsEngine {
         this.plasticStrain = new Float32Array(w * h).fill(0);
         this.randomSeed = randomSeed;
         this.resetRandom();
+        this.toolPath = [];
         this.generateBaseTopography();
     }
     generateBaseTopography() {
@@ -63,6 +65,10 @@ export class ForensicPhysicsEngine {
         this.resetRandom();
         this.generateBaseTopography();
         this.plasticStrain.fill(0);
+        this.toolPath = [];
+    }
+    getToolPath() {
+        return this.toolPath.slice();
     }
     resetRandom() {
         this.random = createSeededRandom(this.randomSeed);
@@ -278,6 +284,10 @@ export class ForensicPhysicsEngine {
         // Fracture Threshold
         const fractureThreshold = 0.5;
         let stepsTaken = 0;
+        let elapsedTime = 0;
+        const pathSampleStep = 0.25;
+        let lastSampleDist = -pathSampleStep;
+        this.toolPath = [];
         // CORRECTION 2: Natural Frequency Chatter
         // Chatter is a temporal vibration (Hz).
         // Natural freq of hand/tool system approx 50-100Hz?
@@ -305,12 +315,17 @@ export class ForensicPhysicsEngine {
                     this.generateCrack(cx, cy, dirX, dirY, Math.abs(toolZ) * 2, mat.brittleness);
                 }
             }
+            if (currentDist - lastSampleDist >= pathSampleStep) {
+                this.toolPath.push({ x: cx, y: cy, toolZ, time: elapsedTime });
+                lastSampleDist = currentDist;
+            }
             // 3. Move
             const tremor = (this.random() - 0.5) * 0.05;
             cx += (dirX * velocity * timeStep) + (-dirY * tremor);
             cy += (dirY * velocity * timeStep) + (dirX * tremor);
             currentDist += velocity * timeStep;
             stepsTaken++;
+            elapsedTime += timeStep;
             // Yield every 500 steps (approx 10-20ms of work) to keep UI responsive
             if (stepsTaken % 500 === 0) {
                 const prog = (currentDist / totalDist) * 90; // Go up to 90%
