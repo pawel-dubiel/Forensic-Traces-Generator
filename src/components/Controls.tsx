@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Typography, Slider, MenuItem, Select, FormControl, InputLabel, Button, Divider, FormControlLabel, Checkbox } from '@mui/material';
+import { Box, Typography, Slider, MenuItem, Select, FormControl, InputLabel, Button, Divider, FormControlLabel, Checkbox, TextField } from '@mui/material';
 import type { SimulationState } from '../App';
 import { PlayCircle, Trash2 } from 'lucide-react';
 
@@ -15,6 +15,9 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
   const handleChange = (key: keyof SimulationState, value: any) => {
     setSimState(prev => ({ ...prev, [key]: value }));
   };
+
+  const timeStepValid = Number.isFinite(simState.timeStep) && simState.timeStep > 0;
+  const stepsPerSecond = timeStepValid ? 1 / simState.timeStep : 0;
 
   return (
     <Box sx={{ p: 3 }}>
@@ -93,6 +96,28 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
             onChange={(_, val) => handleChange('speed', val)}
             min={1} max={100}
             valueLabelDisplay="auto"
+          />
+        </Box>
+
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <TextField
+            label="Time Step (s)"
+            type="number"
+            value={Number.isFinite(simState.timeStep) ? simState.timeStep : ''}
+            onChange={(e) => {
+              const raw = e.target.value.trim();
+              handleChange('timeStep', raw === '' ? NaN : Number(raw));
+            }}
+            inputProps={{ min: 0, step: 'any' }}
+            error={!timeStepValid}
+            helperText={timeStepValid ? ' ' : 'Time step must be a positive number'}
+            fullWidth
+          />
+          <TextField
+            label="Steps per second"
+            value={timeStepValid ? stepsPerSecond.toFixed(2) : ''}
+            InputProps={{ readOnly: true }}
+            fullWidth
           />
         </Box>
 
@@ -220,6 +245,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         size="large" 
         startIcon={<PlayCircle />}
         onClick={onExecute}
+        disabled={!timeStepValid}
         sx={{ 
           height: 50,
           background: 'linear-gradient(45deg, #00e5ff 30%, #2979ff 90%)',

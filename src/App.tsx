@@ -12,6 +12,7 @@ export interface SimulationState {
   direction: number; // degrees (0-360)
   speed: number; // mm/s (affects chatter)
   chatter: number; // 0-1 range (vibration intensity)
+  timeStep: number; // seconds
   toolWear: number; // 0-1 range (micro-chipping/dullness)
   material: 'aluminum' | 'steel' | 'brass' | 'wood' | 'gold';
   viewMode: 'standard' | 'heatmap' | 'normal';
@@ -51,6 +52,7 @@ function App() {
     direction: 0,
     speed: 10,
     chatter: 0.2,
+    timeStep: 0.0005,
     toolWear: 0.1,
     material: 'aluminum',
     viewMode: 'standard',

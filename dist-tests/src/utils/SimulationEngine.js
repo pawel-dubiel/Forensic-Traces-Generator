@@ -246,12 +246,14 @@ export class ForensicPhysicsEngine {
      * Executes the simulation loop with high-fidelity physics.
      * Generator function yields progress (0-100).
      */
-    *simulateCutGenerator(startX, startY, angleDir, force, toolKernel, materialType, speed, chatterParam) {
+    *simulateCutGenerator(startX, startY, angleDir, force, toolKernel, materialType, speed, chatterParam, timeStep) {
+        if (!Number.isFinite(timeStep) || timeStep <= 0) {
+            throw new Error('timeStep must be a positive finite number');
+        }
         this.resetRandom();
         const mat = MATERIALS[materialType];
         const elasticPlastic = new ElasticPlasticModel(getElasticPlasticMaterial(materialType));
         // Physics Loop Parameters
-        const timeStep = 0.0005; // 0.5ms steps
         const totalDist = 40; // mm length of cut
         let currentDist = 0;
         let cx = startX;
@@ -288,6 +290,7 @@ export class ForensicPhysicsEngine {
         const pathSampleStep = 0.25;
         let lastSampleDist = -pathSampleStep;
         this.toolPath = [];
+        this.toolPath.push({ x: cx, y: cy, toolZ: -penetration, time: 0 });
         // CORRECTION 2: Natural Frequency Chatter
         // Chatter is a temporal vibration (Hz).
         // Natural freq of hand/tool system approx 50-100Hz?

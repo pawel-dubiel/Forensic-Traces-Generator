@@ -328,14 +328,17 @@ export class ForensicPhysicsEngine {
         toolKernel: ToolKernel,
         materialType: 'aluminum' | 'brass' | 'steel' | 'wood' | 'gold',
         speed: number,
-        chatterParam: number
+        chatterParam: number,
+        timeStep: number
     ): Generator<number> {
+        if (!Number.isFinite(timeStep) || timeStep <= 0) {
+            throw new Error('timeStep must be a positive finite number');
+        }
         this.resetRandom();
         const mat = MATERIALS[materialType];
         const elasticPlastic = new ElasticPlasticModel(getElasticPlasticMaterial(materialType));
         
         // Physics Loop Parameters
-        const timeStep = 0.0005; // 0.5ms steps
         const totalDist = 40; // mm length of cut
         let currentDist = 0;
         

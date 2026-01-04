@@ -136,6 +136,11 @@ const MaterialSurface: React.FC<{
         }
     );
 
+    const timeStep = simState.timeStep;
+    if (!Number.isFinite(timeStep) || timeStep <= 0) {
+      throw new Error('timeStep must be a positive finite number');
+    }
+
     // 2. Execute Physics Loop (Generator Pattern)
     const generator = engine.simulateCutGenerator(
         10, 30, // Start X, Y
@@ -144,7 +149,8 @@ const MaterialSurface: React.FC<{
         kernel,
         simState.material,
         simState.speed,
-        simState.chatter
+        simState.chatter,
+        timeStep
     );
 
     // Iterate through generator to allow UI updates
