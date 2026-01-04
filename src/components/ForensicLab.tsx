@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import type { SimulationState } from '../App';
 import { ForensicPhysicsEngine } from '../utils/SimulationEngine';
 import { ScrewdriverModel, KnifeModel, CrowbarModel, HammerFaceModel, HammerClawModel, SpoonModel } from './Tools3D';
+import { createSeededRandom, deriveSeed } from '../utils/random';
 
 interface LabProps {
   simState: SimulationState;
@@ -73,7 +74,10 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
   const meshRef = useRef<THREE.Mesh>(null);
   
   // Initialize Engine
-  const engine = useMemo(() => new ForensicPhysicsEngine(WIDTH_MM, HEIGHT_MM, RESOLUTION), []);
+  const engine = useMemo(
+    () => new ForensicPhysicsEngine(WIDTH_MM, HEIGHT_MM, RESOLUTION, simState.randomSeed),
+    [simState.randomSeed]
+  );
 
   useEffect(() => {
     // Reset geometry to base topography on mount or reset
@@ -105,12 +109,20 @@ const MaterialSurface: React.FC<{ simState: SimulationState, setSimState?: React
     if (simState.toolType === 'hammer_claw') toolSize = 30;
     if (simState.toolType === 'spoon') toolSize = 30;
 
+    const baseRandom = createSeededRandom(simState.randomSeed);
+    const striationRandom = createSeededRandom(deriveSeed(simState.randomSeed, 1));
+
     const kernel = engine.createToolKernel(
         simState.toolType,
         toolSize,
         simState.toolWear,
         simState.angle,
-        simState.direction
+        simState.direction,
+        {
+          baseRandom,
+          striationRandom,
+          striationsEnabled: true
+        }
     );
 
     // 2. Execute Physics Loop (Generator Pattern)

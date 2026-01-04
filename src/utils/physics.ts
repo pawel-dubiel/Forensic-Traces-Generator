@@ -25,14 +25,17 @@ const TOOL_GEOMETRY = {
  * Generates a consistent microscopic edge signature for the tool
  * simulating manufacturing grinding marks + wear.
  */
-const generateToolSignature = (_width: number, wear: number): number[] => {
+const generateToolSignature = (_width: number, wear: number, random: () => number): number[] => {
     // Width isn't strictly needed for the 1D signature pattern generation itself, 
     // but kept in signature for potential future scaling.
     const resolution = 100; // samples across the width
     const signature: number[] = [];
     
     // Base manufacturing marks (regular grinding)
-    const grindFreq = 10 + Math.random() * 20;
+    if (typeof random !== 'function') {
+        throw new Error('random must be a function');
+    }
+    const grindFreq = 10 + random() * 20;
     
     for (let i = 0; i < resolution; i++) {
         const x = i / resolution;
@@ -44,11 +47,11 @@ const generateToolSignature = (_width: number, wear: number): number[] => {
         microZ += Math.sin(x * grindFreq * Math.PI * 2) * 0.05;
         
         // 3. Wear (Random high-freq noise + notches)
-        const wearNoise = (Math.random() - 0.5) * wear * 0.5;
+        const wearNoise = (random() - 0.5) * wear * 0.5;
         
         // Occasional deep notches (chips in blade)
-        if (Math.random() < wear * 0.1) {
-             microZ -= (Math.random() * wear * 1.0); 
+        if (random() < wear * 0.1) {
+             microZ -= (random() * wear * 1.0); 
         }
 
         signature.push(microZ + wearNoise);
@@ -64,8 +67,13 @@ export const calculateTracePhysics = (
     speed: number,
     chatter: number,
     toolWear: number,
-    toolHardness: number
+    toolHardness: number,
+    random: () => number
 ): TraceProfile => {
+    
+    if (typeof random !== 'function') {
+        throw new Error('random must be a function');
+    }
     
     const mat = MATERIAL_PROPERTIES[material];
     const tool = TOOL_GEOMETRY[toolType];
@@ -119,7 +127,7 @@ export const calculateTracePhysics = (
     const chatterAmp = chatter * (maxDepth * 0.2) * instabilityFactor;
 
     // --- 5. Micro-Striations ---
-    const striationMap = generateToolSignature(width, toolWear);
+    const striationMap = generateToolSignature(width, toolWear, random);
 
     return {
         depthProfile: [], // Calculated in renderer per vertex for speed

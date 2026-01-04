@@ -72,6 +72,7 @@ For brittle materials, the simulator switches from plastic flow to fracture logi
   - Springback characteristic length derived from contact patch size (LUT per tool kernel) (src/utils/SimulationEngine.ts).
   - Pile‑up via displaced volume distributed into rings (src/utils/SimulationEngine.ts).
   - Chatter as a simple sinusoidal vibration in time (src/utils/SimulationEngine.ts).
+  - Tool edge micro-geometry and striations applied across tool width (src/utils/striations.ts, src/utils/SimulationEngine.ts).
   - Base surface noise (fixed sinusoidal + random noise) (src/utils/SimulationEngine.ts).
 
   Partially implemented
@@ -80,6 +81,6 @@ For brittle materials, the simulator switches from plastic flow to fracture logi
 
   Not implemented
 
-  - Microscopic striation modeling and tool edge micro-geometry applied across the heightfield; striationMap exists but is unused (src/utils/physics.ts).
+  - Use of striationMap from src/utils/physics.ts (the new striation component uses its own model).
   - Anisotropic brushed/grain direction or stochastic pits.
   - Multi‑pass, overshoot, stick‑slip, acceleration profile, or tool slip.
