@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist-tests",
+    "rootDir": ".",
+    "strict": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "types": ["node"]
+  },
+  "include": ["src/utils/elasticPlastic.ts", "tests/**/*.test.ts"]
+}

@@ -1,5 +1,6 @@
 // SimulationEngine.ts
 // High-Fidelity Discrete Heightfield Simulation
+import { ElasticPlasticModel, getElasticPlasticMaterial } from './elasticPlastic';
 
 export interface SurfaceMap {
     width: number;
@@ -15,20 +16,29 @@ export interface ToolKernel {
     centerX: number;
     centerY: number;
     sharpness: number; // 0-1 (1 is razor sharp)
+    contactPatchLUT: ContactPatchSample[];
+    maxProfileDepth: number;
+}
+
+interface ContactPatchSample {
+    depth: number;
+    widthMm: number;
+    heightMm: number;
 }
 
 // Material constants for the simulation loop
 export const MATERIALS = {
     // Brittleness: 0 = Clay (100% Flow), 1 = Glass (100% Fracture/Chip)
-    aluminum: { hardness: 0.5, flow: 0.8, elasticSpringback: 0.02, brittleness: 0.1 },
-    brass: { hardness: 0.7, flow: 0.6, elasticSpringback: 0.05, brittleness: 0.2 },
-    steel: { hardness: 0.9, flow: 0.3, elasticSpringback: 0.08, brittleness: 0.1 },
-    wood: { hardness: 0.2, flow: 0.1, elasticSpringback: 0.15, brittleness: 0.9 }, // High brittleness = Splintering
-    gold: { hardness: 0.3, flow: 0.95, elasticSpringback: 0.01, brittleness: 0.0 }, // Very ductile, piles up easily
+    aluminum: { hardness: 0.5, flow: 0.8, brittleness: 0.1 },
+    brass: { hardness: 0.7, flow: 0.6, brittleness: 0.2 },
+    steel: { hardness: 0.9, flow: 0.3, brittleness: 0.1 },
+    wood: { hardness: 0.2, flow: 0.1, brittleness: 0.9 }, // High brittleness = Splintering
+    gold: { hardness: 0.3, flow: 0.95, brittleness: 0.0 }, // Very ductile, piles up easily
 };
 
 export class ForensicPhysicsEngine {
     surface: SurfaceMap;
+    private plasticStrain: Float32Array;
 
     constructor(widthMM: number, heightMM: number, resolution: number = 20) {
         const w = Math.floor(widthMM * resolution);
@@ -40,6 +50,7 @@ export class ForensicPhysicsEngine {
             resolution: resolution,
             data: new Float64Array(w * h).fill(0)
         };
+        this.plasticStrain = new Float32Array(w * h).fill(0);
         
         this.generateBaseTopography();
     }
@@ -62,6 +73,7 @@ export class ForensicPhysicsEngine {
 
     reset() {
         this.generateBaseTopography();
+        this.plasticStrain.fill(0);
     }
 
     createToolKernel(type: string, sizeMM: number, wear: number, angleDeg: number, directionDeg: number): ToolKernel {
@@ -210,7 +222,18 @@ export class ForensicPhysicsEngine {
             }
         }
 
-        return { profile: kernel, width: gridW, height: gridH, centerX, centerY, sharpness };
+        const { contactPatchLUT, maxProfileDepth } = this.buildContactPatchLUT(kernel, gridW, gridH);
+
+        return {
+            profile: kernel,
+            width: gridW,
+            height: gridH,
+            centerX,
+            centerY,
+            sharpness,
+            contactPatchLUT,
+            maxProfileDepth
+        };
     }
 
     /**
@@ -227,7 +250,7 @@ export class ForensicPhysicsEngine {
         chatterParam: number
     ): Generator<number> {
         const mat = MATERIALS[materialType];
-        const { data } = this.surface;
+        const elasticPlastic = new ElasticPlasticModel(getElasticPlasticMaterial(materialType));
         
         // Physics Loop Parameters
         const timeStep = 0.0005; // 0.5ms steps
@@ -292,9 +315,11 @@ export class ForensicPhysicsEngine {
             
             // Apply vibration to Z
             const toolZ = -penetration + vibration;
+            const penetrationDepth = Math.max(0, -toolZ);
+            const characteristicLength = this.getCharacteristicLength(toolKernel, penetrationDepth);
 
             // 1. Carve
-            this.applyKernel(cx, cy, toolZ, toolKernel, mat);
+            this.applyKernel(cx, cy, toolZ, toolKernel, mat, elasticPlastic, characteristicLength);
 
             // 2. Fracture
             if (mat.brittleness > 0.5 && Math.abs(toolZ) > fractureThreshold) {
@@ -318,19 +343,18 @@ export class ForensicPhysicsEngine {
             }
         }
 
-        // 4. Elastic Springback (Global Pass) - Heavy!
-        if (mat.elasticSpringback > 0) {
-             for(let i=0; i<data.length; i++) {
-                 if (data[i] < 0) { 
-                     data[i] += Math.abs(data[i]) * mat.elasticSpringback;
-                 }
-             }
-        }
-        
         yield 100;
     }
 
-    private applyKernel(cx: number, cy: number, cz: number, kernel: ToolKernel, mat: any) {
+    private applyKernel(
+        cx: number,
+        cy: number,
+        cz: number,
+        kernel: ToolKernel,
+        mat: any,
+        elasticPlastic: ElasticPlasticModel,
+        characteristicLength: number
+    ) {
         const res = this.surface.resolution;
         const gx = Math.floor(cx * res);
         const gy = Math.floor(cy * res);
@@ -353,10 +377,24 @@ export class ForensicPhysicsEngine {
                     const currentHeight = this.surface.data[idx];
                     
                     if (toolHeight < currentHeight) {
-                        const diff = currentHeight - toolHeight;
-                        displacedVolume += diff;
-                        this.surface.data[idx] = toolHeight; // Carve
-                        if (Math.abs(toolHeight) > maxDepth) maxDepth = Math.abs(toolHeight);
+                        const penetration = currentHeight - toolHeight;
+                        const currentPlasticStrain = this.plasticStrain[idx];
+                        const result = elasticPlastic.computePermanentDepth(
+                            penetration,
+                            characteristicLength,
+                            currentPlasticStrain
+                        );
+
+                        if (result.permanentDepth > 0) {
+                            const newHeight = currentHeight - result.permanentDepth;
+                            displacedVolume += result.permanentDepth;
+                            this.surface.data[idx] = newHeight;
+                            if (Math.abs(newHeight) > maxDepth) maxDepth = Math.abs(newHeight);
+                        }
+
+                        if (result.plasticStrainIncrement > 0) {
+                            this.plasticStrain[idx] = currentPlasticStrain + result.plasticStrainIncrement;
+                        }
                     }
                 }
             }
@@ -505,5 +543,101 @@ export class ForensicPhysicsEngine {
                 this.surface.data[idx] += val;
             }
         }
+    }
+
+    private getCharacteristicLength(kernel: ToolKernel, penetrationDepth: number): number {
+        if (!Number.isFinite(penetrationDepth) || penetrationDepth < 0) {
+            throw new Error('penetrationDepth must be a non-negative finite number');
+        }
+        if (!kernel.contactPatchLUT || kernel.contactPatchLUT.length === 0) {
+            throw new Error('contactPatchLUT must be a non-empty array');
+        }
+        if (!Number.isFinite(kernel.maxProfileDepth) || kernel.maxProfileDepth <= 0) {
+            throw new Error('maxProfileDepth must be a positive finite number');
+        }
+
+        const depth = Math.min(penetrationDepth, kernel.maxProfileDepth);
+        const lut = kernel.contactPatchLUT;
+
+        if (depth <= lut[0].depth) {
+            return Math.max(lut[0].widthMm, lut[0].heightMm);
+        }
+
+        for (let i = 1; i < lut.length; i++) {
+            const prev = lut[i - 1];
+            const next = lut[i];
+            if (depth <= next.depth) {
+                const span = next.depth - prev.depth;
+                if (span <= 0) {
+                    throw new Error('contactPatchLUT depth span must be positive');
+                }
+                const t = (depth - prev.depth) / span;
+                const widthMm = prev.widthMm + (next.widthMm - prev.widthMm) * t;
+                const heightMm = prev.heightMm + (next.heightMm - prev.heightMm) * t;
+                const characteristicLength = Math.max(widthMm, heightMm);
+                if (!Number.isFinite(characteristicLength) || characteristicLength <= 0) {
+                    throw new Error('characteristicLength must be a positive finite number');
+                }
+                return characteristicLength;
+            }
+        }
+
+        const last = lut[lut.length - 1];
+        const fallback = Math.max(last.widthMm, last.heightMm);
+        if (!Number.isFinite(fallback) || fallback <= 0) {
+            throw new Error('characteristicLength must be a positive finite number');
+        }
+        return fallback;
+    }
+
+    private buildContactPatchLUT(kernel: Float64Array, width: number, height: number) {
+        let maxProfileDepth = 0;
+        for (let i = 0; i < kernel.length; i++) {
+            const val = kernel[i];
+            if (val < 500 && val > maxProfileDepth) {
+                maxProfileDepth = val;
+            }
+        }
+        if (!Number.isFinite(maxProfileDepth) || maxProfileDepth <= 0) {
+            throw new Error('maxProfileDepth must be a positive finite number');
+        }
+
+        const samples = 24;
+        const lut: ContactPatchSample[] = [];
+        const res = this.surface.resolution;
+
+        for (let i = 0; i < samples; i++) {
+            const depth = (i / (samples - 1)) * maxProfileDepth;
+            let minX = width;
+            let maxX = -1;
+            let minY = height;
+            let maxY = -1;
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const val = kernel[y * width + x];
+                    if (val < 500 && val <= depth) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+            }
+
+            if (maxX < 0 || maxY < 0) {
+                throw new Error(`contact patch lookup failed at depth ${depth}`);
+            }
+
+            const widthMm = (maxX - minX + 1) / res;
+            const heightMm = (maxY - minY + 1) / res;
+            if (!Number.isFinite(widthMm) || widthMm <= 0 || !Number.isFinite(heightMm) || heightMm <= 0) {
+                throw new Error('contact patch dimensions must be positive finite numbers');
+            }
+
+            lut.push({ depth, widthMm, heightMm });
+        }
+
+        return { contactPatchLUT: lut, maxProfileDepth };
     }
 }
