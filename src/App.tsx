@@ -20,6 +20,7 @@ export interface SimulationState {
   showTool: boolean;
   loopGhost: boolean;
   randomSeed: number;
+  resolution: number;
   progress: number; // 0-100
   isSimulating: boolean;
   isResetting: boolean;
@@ -58,6 +59,7 @@ function App() {
     showTool: true,
     loopGhost: false,
     randomSeed: 1337,
+    resolution: 30,
     progress: 0,
     isSimulating: false,
     isResetting: false,

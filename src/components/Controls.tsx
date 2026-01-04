@@ -146,6 +146,21 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
 
       <Box sx={{ mt: 2, mb: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <FormControl fullWidth size="small">
+          <InputLabel>Resolution (pts/mm)</InputLabel>
+          <Select
+            value={simState.resolution}
+            label="Resolution (pts/mm)"
+            onChange={(e) => handleChange('resolution', e.target.value)}
+          >
+            <MenuItem value={15}>15</MenuItem>
+            <MenuItem value={30}>30</MenuItem>
+            <MenuItem value={40}>40</MenuItem>
+            <MenuItem value={60}>60</MenuItem>
+            <MenuItem value={100}>100</MenuItem>
+          </Select>
+        </FormControl>
+
+        <FormControl fullWidth size="small">
           <InputLabel>View Mode</InputLabel>
           <Select
             value={simState.viewMode}

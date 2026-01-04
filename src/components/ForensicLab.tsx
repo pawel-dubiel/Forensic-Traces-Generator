@@ -17,10 +17,9 @@ interface LabProps {
 // 60mm plate size. 
 // 15 pts/mm = 900x900 = 810k verts (Medium)
 // 30 pts/mm = 1800x1800 = 3.24M verts (High Fidelity - Forensically Accurate)
-const RESOLUTION = 30; 
+const DEFAULT_RESOLUTION = 30; 
 const WIDTH_MM = 60;
 const HEIGHT_MM = 60;
-const SEGMENTS = Math.floor(WIDTH_MM * RESOLUTION);
 
 const ForensicScaleBar: React.FC<{ position?: [number, number, number], rotation?: [number, number, number] }> = ({ position, rotation }) => {
     // ABFO-style L-ruler
@@ -79,9 +78,10 @@ const MaterialSurface: React.FC<{
   const meshRef = useRef<THREE.Mesh>(null);
   
   // Initialize Engine
+  const resolution = simState.resolution ?? DEFAULT_RESOLUTION;
   const engine = useMemo(
-    () => new ForensicPhysicsEngine(WIDTH_MM, HEIGHT_MM, RESOLUTION, simState.randomSeed),
-    [simState.randomSeed]
+    () => new ForensicPhysicsEngine(WIDTH_MM, HEIGHT_MM, resolution, simState.randomSeed),
+    [simState.randomSeed, resolution]
   );
 
   useEffect(() => {
@@ -229,7 +229,14 @@ const MaterialSurface: React.FC<{
 
   return (
     <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} receiveShadow castShadow>
-      <planeGeometry args={[WIDTH_MM, HEIGHT_MM, SEGMENTS-1, SEGMENTS-1]} />
+      <planeGeometry
+        args={[
+          WIDTH_MM,
+          HEIGHT_MM,
+          Math.floor(WIDTH_MM * resolution) - 1,
+          Math.floor(HEIGHT_MM * resolution) - 1
+        ]}
+      />
       
       {simState.viewMode === 'standard' && (
           <meshStandardMaterial 
