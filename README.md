@@ -68,19 +68,18 @@ For brittle materials, the simulator switches from plastic flow to fracture logi
 
   - Contact patch shape from tool kernels (src/utils/SimulationEngine.ts) for screwdriver/knife/crowbar/hammer/spoon.
   - Depth from a basic force vs hardness relation with a sharpness switch (src/utils/SimulationEngine.ts).
+  - Elastic-plastic response with per-cell plastic strain, elastic recovery, and strain hardening (src/utils/elasticPlastic.ts, src/utils/SimulationEngine.ts).
+  - Springback characteristic length derived from contact patch size (LUT per tool kernel) (src/utils/SimulationEngine.ts).
   - Pile‑up via displaced volume distributed into rings (src/utils/SimulationEngine.ts).
   - Chatter as a simple sinusoidal vibration in time (src/utils/SimulationEngine.ts).
   - Base surface noise (fixed sinusoidal + random noise) (src/utils/SimulationEngine.ts).
 
   Partially implemented
 
-  - Elastic springback exists, but it’s a global post‑pass using a constant elasticSpringback per material, not tied to Young’s modulus (src/utils/SimulationEngine.ts).
+  - Tests exist for the elastic-plastic module, but no integration tests for the full simulation loop (tests/elasticPlastic.test.ts).
 
   Not implemented
 
-  - Strain hardening / evolving hardness ahead of the tool.
-  - Modulus‑based elastic recovery tied to actual elastic/plastic partitioning.
-  - Microscopic striation modeling beyond a tiny sine micro‑noise; striationMap exists but is unused (src/utils/physics.ts).
+  - Microscopic striation modeling and tool edge micro-geometry applied across the heightfield; striationMap exists but is unused (src/utils/physics.ts).
   - Anisotropic brushed/grain direction or stochastic pits.
   - Multi‑pass, overshoot, stick‑slip, acceleration profile, or tool slip.
-
