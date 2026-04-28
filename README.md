@@ -1,88 +1,67 @@
-# Forensic Tool Mark Simulator
+# Forensic Mark Simulator
 
-## Introduction
-The **Forensic Tool Mark Simulator** is a high-fidelity scientific application designed to reconstruct and visualize the microscopic physical interactions between tools and material surfaces. It acts as a "virtual lab bench," allowing examiners to simulate scratches, gouges, and impacts under controlled variables.
+A small 3D lab for generating forensic-style tool marks.
 
-Unlike standard 3D modeling software, this application is driven by a **Discrete Element Physics Engine** (running in 64-bit precision) that calculates material yield, plastic flow, fracture mechanics, and dynamic friction in real-time.
+Pick a tool, pick a material, tune the force/angle/speed, then run the simulation and inspect the mark with forensic visualization modes.
 
-![Example](example1.gif)
+![Forensic Mark Simulator preview](example1.gif)
 
----
+## What It Does
 
-## Physics Engine Mechanics
+- Simulates scratches, gouges, and impacts on a 60 mm surface.
+- Supports screwdriver, knife, crowbar, hammer face, hammer claw, and spoon profiles.
+- Supports aluminum, brass, steel, wood, and gold target materials.
+- Models contact patches, plastic deformation, pile-up, springback, chatter, wear, and striation detail.
+- Renders the result in a Three.js viewport with orbit controls.
+- Includes depth heatmap, normal map, raking light, scale bars, and optional 3D tool display.
+- Uses deterministic seeds so a run can be repeated.
 
-The simulation is built upon several core pillars of material science and forensic physics.
+## Quick Start
 
-### 1. Contact Mechanics & Plastic Deformation
-The engine models the physical displacement of material when subjected to stress beyond its yield point.
-*   **Depth & Contact Patch:** Penetration depth is calculated using **Meyer’s Law**, which differentiates between the high stress concentration of sharp tools (knives) versus the distributed load of blunt tools (hammers). The contact patch shape is dynamically generated based on the tool's 3D geometry and its angle of attack relative to the surface.
-*   **Plastic Flow & Pile-up:** In ductile materials like Gold or Aluminum, material is not destroyed; it flows. The simulator strictly enforces **conservation of volume**, meaning the material displaced from the groove is redistributed to the edges, creating realistic "lips" or pile-up ridges characteristic of soft metals.
-*   **Elastic Recovery:** The system accounts for "springback"—the tendency of elastic materials to recover slightly after the cutting force is removed, affecting the final depth measurement.
+```bash
+npm install
+npm run dev
+```
 
-### 2. Microscopic Striation Modeling
-Tool marks are rarely smooth; they contain a unique signature of parallel lines (striations) caused by imperfections in the tool edge.
-*   **Edge Micro-Geometry:** The simulator procedurally generates a unique "fingerprint" for the tool edge, simulating manufacturing grinding marks and irregularities.
-*   **Wear & Damage:** The **Wear** parameter introduces stochastic chips, nicks, and dull spots along the blade. As these imperfections drag through the material, they leave distinct, matching striations in the trench, which are critical for forensic matching.
+Then open the local Vite URL shown in the terminal.
 
-### 3. Surface Topography Synthesis
-Real surfaces are never perfectly flat. The engine synthesizes a realistic base topology before the tool even touches the surface.
-*   **Anisotropic Roughness:** Simulates manufacturing finishes (like brushed metal) by generating directional grain noise.
-*   **Stochastic Pits:** Randomly distributes microscopic defects and pits across the surface, providing landmark features that help provide scale and realism to the macroscopic tool mark.
+## Scripts
 
-### 4. Stick-Slip Dynamics & Stability
-The interaction between tool and surface is dynamic, not static.
-*   **Stick-Slip (Chatter):** As a tool moves, friction causes it to momentarily stick to the material, build tension, and then slip forward. This cycle creates a harmonic vibration known as "chatter."
-*   **Speed Dependency:** The simulator couples this vibration to the **Speed** control. Following the wave equation, faster tool speeds elongate the wavelength of these chatter marks, allowing examiners to infer the velocity of the original tool application.
-*   **Hand Tremor:** Subtle randomized movements are superimposed on the trajectory to simulate human instability during the cut.
+```bash
+npm run dev      # start the app
+npm run build    # typecheck and build
+npm run lint     # run ESLint
+npm test         # compile and run node tests
+npm run preview  # preview the production build
+```
 
-### 5. Fracture Mechanics
-For brittle materials, the simulator switches from plastic flow to fracture logic.
-*   **Chip Formation:** In materials like Wood or Hardened Steel, high stress causes chunks of material to tear away (chip detachment) rather than flow, leaving a roughened, jagged trench floor.
-*   **Crack Propagation:** High-force impact events trigger a branching algorithm that shoots randomized cracks outward from the impact site, simulating the brittle failure of the material structure.
+## How To Use
 
----
+1. Choose a tool profile and target material.
+2. Adjust hardness, force, angle, direction, speed, chatter, wear, and time step.
+3. Choose a render resolution and view mode.
+4. Click `EXECUTE SIMULATION`.
+5. Inspect the mark with raking light, heatmap, normal map, and scale bars.
 
-## Features
+## Project Shape
 
-### Tool Lab
-*   **Tools:** Screwdriver, Knife, Crowbar, Hammer (Face & Claw).
-*   **Materials:** Gold (Soft/Ductile), Aluminum, Brass, Steel, Wood (Brittle).
-*   **3D Tool Visualization:** Real-time 3D representation of the tool geometry, orienting itself to match your Angle and Direction settings.
+```text
+src/
+  components/
+    Controls.tsx       # side panel controls
+    ForensicLab.tsx    # Three.js lab viewport
+    Tools3D.tsx        # tool models
+  utils/
+    SimulationEngine.ts # core simulation loop
+    elasticPlastic.ts   # material response helpers
+    random.ts           # seeded randomness
+    striations.ts       # edge micro-geometry
+tests/
+  simulationEngine.test.ts
+```
 
-### Forensic Visualization Suite
-*   **Raking Light:** A movable light source (0-90°) to cast long shadows. Set to **0-5°** to reveal microscopic topography invisible under direct light.
-*   **Depth Heatmap:** False-color view (Blue=Deep, Red=High) for quantitative depth analysis.
-*   **Normal Map:** Visualizes surface slope to isolate texture from color.
-*   **Scale Bars:** ABFO-style rulers (Surface & HUD) for measuring trace dimensions.
+## Reality Check
 
-## Installation & Usage
+This is an interactive simulator, not validated forensic evidence software.
 
-1.  **Install:** `npm install`
-2.  **Run:** `npm run dev`
-3.  **Controls:** Use the sidebar to set Tool, Material, and Physics parameters.
-4.  **Execute:** Click **EXECUTE SIMULATION** and wait for the physics engine to compute the interaction.
-
-## Notes:
-
-  What is implemented (simplified)
-
-  - Contact patch shape from tool kernels (src/utils/SimulationEngine.ts) for screwdriver/knife/crowbar/hammer/spoon.
-  - Depth from normal force, material hardness in MPa, tool-hardness penalty, and contact-patch area lookup (src/utils/SimulationEngine.ts).
-  - Elastic-plastic response with per-cell plastic strain, elastic recovery, and strain hardening (src/utils/elasticPlastic.ts, src/utils/SimulationEngine.ts).
-  - Springback characteristic length derived from contact patch size (LUT per tool kernel) (src/utils/SimulationEngine.ts).
-  - Pile‑up via displaced cell volume distributed into rings (src/utils/SimulationEngine.ts).
-  - Chatter as a simple sinusoidal vibration in time (src/utils/SimulationEngine.ts).
-  - Tool edge micro-geometry and striations applied across tool width (src/utils/striations.ts, src/utils/SimulationEngine.ts).
-  - Path-local high-resolution striation detail map at 240 samples/mm, rendered separately from the coarse geometry so fine striae are not limited by mesh vertex spacing.
-  - Base surface noise from millimeter-coordinate sinusoidal texture plus coordinate-stable noise (src/utils/SimulationEngine.ts).
-
-  Partially implemented
-
-  - Tests cover the elastic-plastic module, striation generation, and key full simulation invariants.
-  - Render resolution is capped in the UI to avoid creating browser-hostile geometry sizes until tiled/decimated rendering exists.
-  - Fine striation detail is currently a straight strip over the tool path; it does not yet follow tremor curvature sample-by-sample.
-
-  Not implemented
-
-  - Anisotropic brushed/grain direction or stochastic pits.
-  - Multi‑pass, overshoot, stick‑slip, acceleration profile, or tool slip.
+The current model covers useful visual and physical approximations, but some real-world behavior is still simplified. See [BACKLOG.md](BACKLOG.md) for the calibration, fracture, friction, material, and rendering work that remains.
