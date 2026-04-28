@@ -4,7 +4,7 @@ import { OrbitControls, Environment, Grid, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SimulationState } from '../App';
 import { buildSurfaceMeshIndices, ForensicPhysicsEngine } from '../utils/SimulationEngine';
-import type { SurfaceDetailMap, ToolPathPoint } from '../utils/SimulationEngine';
+import type { FractureState, SurfaceDetailMap, ToolPathPoint } from '../utils/SimulationEngine';
 import { ScrewdriverModel, KnifeModel, CrowbarModel, HammerFaceModel, HammerClawModel, SpoonModel } from './Tools3D';
 import { createSeededRandom, deriveSeed } from '../utils/random';
 
@@ -29,6 +29,139 @@ const getRenderResolution = (value: number) => {
     throw new Error(`resolution must be ${MAX_RENDER_RESOLUTION} pts/mm or lower for the current renderer`);
   }
   return value;
+};
+
+const createPlateShellGeometry = (
+  widthMm: number,
+  heightMm: number,
+  resolution: number,
+  thicknessMm: number,
+  surfaceData: ArrayLike<number>,
+  fractureState: FractureState
+) => {
+  if (!Number.isFinite(widthMm) || widthMm <= 0) {
+    throw new Error('widthMm must be a positive finite number');
+  }
+  if (!Number.isFinite(heightMm) || heightMm <= 0) {
+    throw new Error('heightMm must be a positive finite number');
+  }
+  if (!Number.isFinite(resolution) || !Number.isInteger(resolution) || resolution <= 0) {
+    throw new Error('resolution must be a positive integer');
+  }
+  if (!Number.isFinite(thicknessMm) || thicknessMm <= 0) {
+    throw new Error('thicknessMm must be a positive finite number');
+  }
+  const { detached, edgeLift, debrisHeight } = fractureState;
+  const gridWidth = Math.floor(widthMm * resolution);
+  const gridHeight = Math.floor(heightMm * resolution);
+  const expectedLength = gridWidth * gridHeight;
+  if (
+    surfaceData.length !== expectedLength ||
+    detached.length !== expectedLength ||
+    edgeLift.length !== expectedLength ||
+    debrisHeight.length !== expectedLength
+  ) {
+    throw new Error('plate shell inputs must match width * height * resolution');
+  }
+
+  const halfWidth = widthMm / 2;
+  const halfHeight = heightMm / 2;
+  const bottomY = -thicknessMm;
+  const cellWidth = gridWidth - 1;
+  const cellHeight = gridHeight - 1;
+  const presentCells = new Uint8Array(cellWidth * cellHeight);
+  let hasDetached = false;
+  let hasPresentCell = false;
+
+  for (let i = 0; i < detached.length; i++) {
+    if (detached[i]) {
+      hasDetached = true;
+      break;
+    }
+  }
+
+  for (let y = 0; y < cellHeight; y++) {
+    for (let x = 0; x < cellWidth; x++) {
+      const a = y * gridWidth + x;
+      const b = a + 1;
+      const c = (y + 1) * gridWidth + x;
+      const d = c + 1;
+      if (!detached[a] && !detached[b] && !detached[c] && !detached[d]) {
+        presentCells[y * cellWidth + x] = 1;
+        hasPresentCell = true;
+      }
+    }
+  }
+
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const xFor = (x: number) => (x / (gridWidth - 1)) * widthMm - halfWidth;
+  const zFor = (y: number) => (y / (gridHeight - 1)) * heightMm - halfHeight;
+  const topYFor = (index: number) => Math.max(
+    bottomY,
+    surfaceData[index] + edgeLift[index] + debrisHeight[index]
+  );
+  const addVertex = (x: number, y: number, z: number) => {
+    positions.push(x, y, z);
+    return (positions.length / 3) - 1;
+  };
+  const cellPresent = (x: number, y: number) => (
+    x >= 0 &&
+    x < cellWidth &&
+    y >= 0 &&
+    y < cellHeight &&
+    presentCells[y * cellWidth + x] === 1
+  );
+  const addWallSegment = (ax: number, ay: number, bx: number, by: number) => {
+    const aIndex = ay * gridWidth + ax;
+    const bIndex = by * gridWidth + bx;
+    const xA = xFor(ax);
+    const zA = zFor(ay);
+    const xB = xFor(bx);
+    const zB = zFor(by);
+    const topA = addVertex(xA, topYFor(aIndex), zA);
+    const topB = addVertex(xB, topYFor(bIndex), zB);
+    const bottomA = addVertex(xA, bottomY, zA);
+    const bottomB = addVertex(xB, bottomY, zB);
+    indices.push(topA, bottomA, topB, topB, bottomA, bottomB);
+  };
+
+  const geometry = new THREE.BufferGeometry();
+
+  if (hasPresentCell) {
+    for (let y = 0; y < cellHeight; y++) {
+      for (let x = 0; x < cellWidth; x++) {
+        if (!cellPresent(x, y)) {
+          continue;
+        }
+        if (!cellPresent(x, y - 1)) {
+          addWallSegment(x, y, x + 1, y);
+        }
+        if (!cellPresent(x + 1, y)) {
+          addWallSegment(x + 1, y, x + 1, y + 1);
+        }
+        if (!cellPresent(x, y + 1)) {
+          addWallSegment(x + 1, y + 1, x, y + 1);
+        }
+        if (!cellPresent(x - 1, y)) {
+          addWallSegment(x, y + 1, x, y);
+        }
+      }
+    }
+  }
+
+  if (hasPresentCell && !hasDetached) {
+    const a = addVertex(-halfWidth, bottomY, -halfHeight);
+    const b = addVertex(halfWidth, bottomY, -halfHeight);
+    const c = addVertex(halfWidth, bottomY, halfHeight);
+    const d = addVertex(-halfWidth, bottomY, halfHeight);
+    indices.push(a, c, b, a, d, c);
+  }
+
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
 };
 
 const ForensicScaleBar: React.FC<{ position?: [number, number, number], rotation?: [number, number, number] }> = ({ position, rotation }) => {
@@ -87,6 +220,7 @@ const MaterialSurface: React.FC<{
   onDetailMapUpdate?: (detailMap: SurfaceDetailMap | null) => void;
 }> = ({ simState, setSimState, onToolPathUpdate, onDetailMapUpdate }) => {
   const meshRef = useRef<THREE.Mesh>(null);
+  const shellRef = useRef<THREE.Mesh>(null);
   const fullIndexRef = useRef<THREE.BufferAttribute | null>(null);
   
   // Initialize Engine
@@ -123,6 +257,38 @@ const MaterialSurface: React.FC<{
     }
     throw new Error(`Unsupported material "${material}"`);
   }, [material]);
+  const plateShellGeometry = useMemo(
+    () => createPlateShellGeometry(
+      WIDTH_MM,
+      HEIGHT_MM,
+      resolution,
+      materialThicknessMm,
+      engine.surface.data,
+      engine.getFractureState()
+    ),
+    [engine, materialThicknessMm, resolution]
+  );
+
+  useEffect(() => () => plateShellGeometry.dispose(), [plateShellGeometry]);
+
+  const rebuildPlateShell = useCallback((fractureState: FractureState) => {
+    if (!shellRef.current) {
+      return;
+    }
+    const previousGeometry = shellRef.current.geometry;
+    const nextGeometry = createPlateShellGeometry(
+      WIDTH_MM,
+      HEIGHT_MM,
+      resolution,
+      materialThicknessMm,
+      engine.surface.data,
+      fractureState
+    );
+    shellRef.current.geometry = nextGeometry;
+    if (previousGeometry !== plateShellGeometry) {
+      previousGeometry.dispose();
+    }
+  }, [engine.surface.data, materialThicknessMm, plateShellGeometry, resolution]);
 
   const rebuildSurfaceIndex = useCallback((geometry: THREE.BufferGeometry, detached: Uint8Array) => {
     if (!fullIndexRef.current) {
@@ -178,6 +344,7 @@ const MaterialSurface: React.FC<{
       throw new Error('fracture state arrays must match surface heightfield length');
     }
     rebuildSurfaceIndex(geometry, detached);
+    rebuildPlateShell(fractureState);
     const baseColor = new THREE.Color(materialColor);
     const fractureColor = new THREE.Color('#f2d6ba');
     const debrisColor = new THREE.Color('#6b5a47');
@@ -226,7 +393,7 @@ const MaterialSurface: React.FC<{
     positions.needsUpdate = true;
     colors.needsUpdate = true;
     geometry.computeVertexNormals();
-  }, [engine, materialColor, rebuildSurfaceIndex, simState.viewMode]);
+  }, [engine, materialColor, rebuildPlateShell, rebuildSurfaceIndex, simState.viewMode]);
 
   const runSimulation = useCallback(async () => {
     if (!meshRef.current) return;
@@ -345,38 +512,49 @@ const MaterialSurface: React.FC<{
   }, [engine, onDetailMapUpdate, onToolPathUpdate, simState.isResetting, updateMeshFromEngine]);
 
   return (
-    <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} receiveShadow castShadow>
-      <planeGeometry
-        args={[
-          WIDTH_MM,
-          HEIGHT_MM,
-          Math.floor(WIDTH_MM * resolution) - 1,
-          Math.floor(HEIGHT_MM * resolution) - 1
-        ]}
-      />
-      
-      {simState.viewMode === 'standard' && (
-          <meshStandardMaterial 
-            color="white"
-            vertexColors={true}
-            roughness={simState.material === 'wood' ? 0.9 : 0.4} 
-            metalness={simState.material === 'wood' ? 0.0 : 0.8}
-            side={THREE.DoubleSide}
-            flatShading={false}
-          />
-      )}
+    <>
+      <mesh ref={shellRef} geometry={plateShellGeometry} receiveShadow castShadow>
+        <meshStandardMaterial
+          color={materialColor}
+          roughness={simState.material === 'wood' ? 0.95 : 0.55}
+          metalness={simState.material === 'wood' ? 0.0 : 0.65}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
 
-      {simState.viewMode === 'heatmap' && (
-          <meshBasicMaterial 
-            vertexColors={true}
-            side={THREE.DoubleSide}
-          />
-      )}
+      <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} receiveShadow castShadow>
+        <planeGeometry
+          args={[
+            WIDTH_MM,
+            HEIGHT_MM,
+            Math.floor(WIDTH_MM * resolution) - 1,
+            Math.floor(HEIGHT_MM * resolution) - 1
+          ]}
+        />
 
-      {simState.viewMode === 'normal' && (
-          <meshNormalMaterial side={THREE.DoubleSide} />
-      )}
-    </mesh>
+        {simState.viewMode === 'standard' && (
+            <meshStandardMaterial
+              color="white"
+              vertexColors={true}
+              roughness={simState.material === 'wood' ? 0.9 : 0.4}
+              metalness={simState.material === 'wood' ? 0.0 : 0.8}
+              side={THREE.DoubleSide}
+              flatShading={false}
+            />
+        )}
+
+        {simState.viewMode === 'heatmap' && (
+            <meshBasicMaterial
+              vertexColors={true}
+              side={THREE.DoubleSide}
+            />
+        )}
+
+        {simState.viewMode === 'normal' && (
+            <meshNormalMaterial side={THREE.DoubleSide} />
+        )}
+      </mesh>
+    </>
   );
 };
 

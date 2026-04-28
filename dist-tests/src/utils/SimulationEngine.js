@@ -176,6 +176,9 @@ export class ForensicPhysicsEngine {
             debrisHeight: this.debrisHeight
         };
     }
+    getSurfaceFieldSample(mapX, mapY) {
+        return this.computeFieldSample(mapX, mapY);
+    }
     resetRandom() {
         this.random = createSeededRandom(this.randomSeed);
     }
@@ -588,8 +591,8 @@ export class ForensicPhysicsEngine {
         const crackDirX = normalX * side;
         const crackDirY = normalY * side;
         const len = Math.sqrt(crackDirX * crackDirX + crackDirY * crackDirY);
-        const cDx = crackDirX / len;
-        const cDy = crackDirY / len;
+        let cDx = crackDirX / len;
+        let cDy = crackDirY / len;
         const length = energy * 4 * mat.brittleness;
         const steps = Math.floor(length * res);
         const cellAreaMm2 = 1 / (res * res);
@@ -608,6 +611,22 @@ export class ForensicPhysicsEngine {
                 this.edgeLift[idx] = Math.min(materialThicknessMm * 0.2, this.edgeLift[idx] + taper * mat.brittleness * 0.01);
                 if (this.damage[idx] >= 1) {
                     this.detachCell(gx, gy, cellAreaMm2, materialThicknessMm, energy * 0.1 * taper, mat, shearResponse);
+                }
+                const field = this.computeFieldSample(gx, gy);
+                const damageGradientMagnitude = Math.hypot(field.damageGradientX, field.damageGradientY);
+                const heightGradientMagnitude = Math.hypot(field.heightGradientX, field.heightGradientY);
+                const releaseX = damageGradientMagnitude > 0
+                    ? field.damageGradientX / damageGradientMagnitude
+                    : (heightGradientMagnitude > 0 ? field.heightGradientX / heightGradientMagnitude : cDx);
+                const releaseY = damageGradientMagnitude > 0
+                    ? field.damageGradientY / damageGradientMagnitude
+                    : (heightGradientMagnitude > 0 ? field.heightGradientY / heightGradientMagnitude : cDy);
+                const blendedX = cDx * 0.82 + releaseX * 0.18;
+                const blendedY = cDy * 0.82 + releaseY * 0.18;
+                const blendedLen = Math.hypot(blendedX, blendedY);
+                if (blendedLen > 0) {
+                    cDx = blendedX / blendedLen;
+                    cDy = blendedY / blendedLen;
                 }
             }
         }
@@ -648,6 +667,56 @@ export class ForensicPhysicsEngine {
             }
         }
     }
+    getEffectiveHeight(index) {
+        return this.surface.data[index] + this.edgeLift[index] + this.debrisHeight[index];
+    }
+    sampleNeighborIndex(x, y) {
+        const clampedX = Math.max(0, Math.min(this.surface.width - 1, x));
+        const clampedY = Math.max(0, Math.min(this.surface.height - 1, y));
+        return clampedY * this.surface.width + clampedX;
+    }
+    computeFieldSample(mapX, mapY) {
+        if (!Number.isInteger(mapX) || mapX < 0 || mapX >= this.surface.width) {
+            throw new Error('mapX must be an in-bounds integer');
+        }
+        if (!Number.isInteger(mapY) || mapY < 0 || mapY >= this.surface.height) {
+            throw new Error('mapY must be an in-bounds integer');
+        }
+        const dxMm = 1 / this.surface.resolution;
+        const centerIdx = this.sampleNeighborIndex(mapX, mapY);
+        const leftIdx = this.sampleNeighborIndex(mapX - 1, mapY);
+        const rightIdx = this.sampleNeighborIndex(mapX + 1, mapY);
+        const downIdx = this.sampleNeighborIndex(mapX, mapY - 1);
+        const upIdx = this.sampleNeighborIndex(mapX, mapY + 1);
+        const centerHeight = this.getEffectiveHeight(centerIdx);
+        const leftHeight = this.getEffectiveHeight(leftIdx);
+        const rightHeight = this.getEffectiveHeight(rightIdx);
+        const downHeight = this.getEffectiveHeight(downIdx);
+        const upHeight = this.getEffectiveHeight(upIdx);
+        const heightGradientX = (rightHeight - leftHeight) / (2 * dxMm);
+        const heightGradientY = (upHeight - downHeight) / (2 * dxMm);
+        const heightLaplacian = (leftHeight + rightHeight + downHeight + upHeight - 4 * centerHeight) / (dxMm * dxMm);
+        const centerDamage = this.damage[centerIdx];
+        const leftDamage = this.damage[leftIdx];
+        const rightDamage = this.damage[rightIdx];
+        const downDamage = this.damage[downIdx];
+        const upDamage = this.damage[upIdx];
+        const damageGradientX = (rightDamage - leftDamage) / (2 * dxMm);
+        const damageGradientY = (upDamage - downDamage) / (2 * dxMm);
+        const damageLaplacian = (leftDamage + rightDamage + downDamage + upDamage - 4 * centerDamage) / (dxMm * dxMm);
+        const slope = Math.hypot(heightGradientX, heightGradientY);
+        const damageGradientMagnitude = Math.hypot(damageGradientX, damageGradientY);
+        const strainConcentration = slope + Math.abs(heightLaplacian) * dxMm * 0.35 + damageGradientMagnitude * dxMm * 0.5;
+        return {
+            heightGradientX,
+            heightGradientY,
+            heightLaplacian,
+            damageGradientX,
+            damageGradientY,
+            damageLaplacian,
+            strainConcentration
+        };
+    }
     accumulateDamage(mapX, mapY, penetration, permanentDepth, plasticStrainIncrement, characteristicLength, cellAreaMm2, materialThicknessMm, mat, shearResponse, substepScale) {
         this.validateNonNegativeFinite(penetration, 'penetration');
         this.validateNonNegativeFinite(permanentDepth, 'permanentDepth');
@@ -668,14 +737,28 @@ export class ForensicPhysicsEngine {
         const cellWidthMm = Math.sqrt(cellAreaMm2);
         const fractureAreaMm2 = cellWidthMm * materialThicknessMm;
         const requiredWorkNmm = mat.fractureEnergyNPerMm * fractureAreaMm2;
-        const drivingWorkNmm = overloadStressMPa * permanentDepth * cellAreaMm2 * (1 + shearResponse.stressRatio * 0.2);
-        const energyRatio = requiredWorkNmm > 0 ? drivingWorkNmm / requiredWorkNmm : 0;
+        const baseDrivingWorkNmm = overloadStressMPa * permanentDepth * cellAreaMm2 * (1 + shearResponse.stressRatio * 0.2);
+        const baseEnergyRatio = requiredWorkNmm > 0 ? baseDrivingWorkNmm / requiredWorkNmm : 0;
         const accumulatedPlasticStrain = this.plasticStrain[idx] + plasticStrainIncrement;
         const plasticExcess = Math.max(0, accumulatedPlasticStrain - mat.criticalPlasticStrain);
-        const brittleDamage = energyRatio * (0.45 + mat.brittleness * 1.35);
-        const ductileDamage = (plasticExcess / mat.criticalPlasticStrain) * mat.flow * Math.max(energyRatio, permanentDepth / materialThicknessMm);
+        const baseBrittleDamage = baseEnergyRatio * (0.45 + mat.brittleness * 1.35);
+        const baseDuctileDamage = (plasticExcess / mat.criticalPlasticStrain) * mat.flow * Math.max(baseEnergyRatio, permanentDepth / materialThicknessMm);
         const breakthroughDamage = Math.max(0, (permanentDepth - materialThicknessMm * 0.35) / materialThicknessMm) * (0.25 + mat.brittleness);
-        const damageIncrement = (brittleDamage + ductileDamage + breakthroughDamage) * substepScale;
+        const baseDamage = baseBrittleDamage + baseDuctileDamage + breakthroughDamage;
+        if (baseDamage <= 0) {
+            return;
+        }
+        let damageIncrement = baseDamage * substepScale;
+        if (baseDamage > 0.02 || this.damage[idx] > 0.15) {
+            const field = this.computeFieldSample(mapX, mapY);
+            const fieldEnergyFactor = 1 + Math.min(0.9, field.strainConcentration * 0.22 + Math.abs(field.damageLaplacian) * cellAreaMm2 * 0.04);
+            const energyRatio = baseEnergyRatio * fieldEnergyFactor;
+            const brittleDamage = energyRatio * (0.45 + mat.brittleness * 1.35);
+            const ductileDamage = (plasticExcess / mat.criticalPlasticStrain) * mat.flow * Math.max(energyRatio, permanentDepth / materialThicknessMm);
+            const thicknessRatio = Math.min(1, permanentDepth / materialThicknessMm);
+            const curvatureDamage = Math.min(0.35, Math.abs(field.heightLaplacian) * cellAreaMm2) * thicknessRatio * (0.08 + mat.brittleness * 0.22);
+            damageIncrement = (brittleDamage + ductileDamage + breakthroughDamage + curvatureDamage) * substepScale;
+        }
         if (damageIncrement <= 0) {
             return;
         }
@@ -692,6 +775,10 @@ export class ForensicPhysicsEngine {
         let bestX = mapX;
         let bestY = mapY;
         let bestScore = -Infinity;
+        const useFieldPropagation = damageIncrement >= 0.01 || this.damage[mapY * this.surface.width + mapX] > 0.2;
+        const originField = useFieldPropagation ? this.computeFieldSample(mapX, mapY) : null;
+        const damageGradientMagnitude = originField ? Math.hypot(originField.damageGradientX, originField.damageGradientY) : 0;
+        const hasDamageGradient = damageGradientMagnitude > 0;
         for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
                 if (dx === 0 && dy === 0) {
@@ -707,8 +794,17 @@ export class ForensicPhysicsEngine {
                     continue;
                 }
                 const len = Math.hypot(dx, dy);
-                const alignment = ((dx / len) * shearResponse.trailingX) + ((dy / len) * shearResponse.trailingY);
-                const score = this.damage[nIdx] * 0.6 + alignment * 0.3 + mat.brittleness * Math.abs(dx / len) * 0.1;
+                const dirX = dx / len;
+                const dirY = dy / len;
+                const alignment = (dirX * shearResponse.trailingX) + (dirY * shearResponse.trailingY);
+                const damageGradientAlignment = hasDamageGradient
+                    ? (dirX * originField.damageGradientX + dirY * originField.damageGradientY) / damageGradientMagnitude
+                    : 0;
+                const score = this.damage[nIdx] * 0.35 +
+                    alignment * 0.22 +
+                    damageGradientAlignment * 0.28 +
+                    (originField ? originField.strainConcentration : 0) * 0.08 +
+                    mat.brittleness * Math.abs(dirX) * 0.08;
                 if (score > bestScore) {
                     bestScore = score;
                     bestX = nx;
@@ -802,7 +898,10 @@ export class ForensicPhysicsEngine {
                 const dx = (x - mapX) / distance;
                 const dy = (y - mapY) / distance;
                 const shearBias = Math.max(0.35, 1 + dx * shearResponse.trailingX + dy * shearResponse.trailingY);
-                const lift = baseLift * (1 - distance / (radius + 1)) * shearBias;
+                const field = this.computeFieldSample(x, y);
+                const cellWidthMm = 1 / this.surface.resolution;
+                const curvatureBias = 1 + Math.min(0.75, field.strainConcentration * 0.25 + Math.abs(field.heightLaplacian) * cellWidthMm * 0.08);
+                const lift = baseLift * (1 - distance / (radius + 1)) * shearBias * curvatureBias;
                 this.edgeLift[idx] = Math.min(maxLift, this.edgeLift[idx] + lift);
             }
         }

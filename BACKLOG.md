@@ -4,7 +4,7 @@
 
 - Calibrate the tangential friction/shear model against measured groove asymmetry, pile-up, and tearing.
 - Extend `Tool Speed` coupling with strain-rate material response and validate chatter wavelength against known ranges.
-- Validate the local continuum-damage fracture model against fracture toughness, stress intensity, and perforation thresholds.
+- Validate the finite-difference field and continuum-damage fracture model against fracture toughness, stress intensity, and perforation thresholds.
 - Add integration tests for volume accounting, especially pile-up near surface boundaries where material can be clipped.
 - Add regression tests that compare representative groove width/depth against expected ranges for each tool/material pair.
 
@@ -27,6 +27,7 @@
 ## P3 - Rendering And Measurement
 
 - Render the detail map as a normal/displacement detail layer instead of only a grayscale overlay.
+- Add renderer regression coverage for dynamic plate thickness, fracture-wall geometry, and through-hole visibility.
 - Add quantitative measurement tools for groove depth, width, pile-up height, and striation spacing.
 - Add exportable cross-sections and CSV/JSON reports for simulation outputs.
 - Add scale-aware microscope views with selectable magnification.

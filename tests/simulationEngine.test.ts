@@ -210,6 +210,28 @@ test('base topography is stable at the same physical coordinate across resolutio
   assert.equal(heightAt(lowResolution, 12, 8), heightAt(highResolution, 12, 8));
 });
 
+test('surface field sample computes gradient laplacian and damage gradient', () => {
+  const engine = new ForensicPhysicsEngine(5, 5, 1, seed);
+  const { damage } = engine.getFractureState();
+
+  for (let y = 0; y < engine.surface.height; y++) {
+    for (let x = 0; x < engine.surface.width; x++) {
+      const idx = y * engine.surface.width + x;
+      engine.surface.data[idx] = x * x + y * y;
+      damage[idx] = x === 3 && y === 2 ? 1 : 0;
+    }
+  }
+
+  const field = engine.getSurfaceFieldSample(2, 2);
+
+  assert.equal(field.heightGradientX, 4);
+  assert.equal(field.heightGradientY, 4);
+  assert.equal(field.heightLaplacian, 4);
+  assert.equal(field.damageGradientX, 0.5);
+  assert.equal(field.damageGradientY, 0);
+  assert.ok(field.strainConcentration > Math.hypot(4, 4));
+});
+
 test('higher force produces a deeper trace', () => {
   const lowForce = simulate(25, 8);
   const highForce = simulate(100, 8);
