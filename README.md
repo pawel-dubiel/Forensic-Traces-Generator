@@ -67,18 +67,20 @@ For brittle materials, the simulator switches from plastic flow to fracture logi
   What is implemented (simplified)
 
   - Contact patch shape from tool kernels (src/utils/SimulationEngine.ts) for screwdriver/knife/crowbar/hammer/spoon.
-  - Depth from a basic force vs hardness relation with a sharpness switch (src/utils/SimulationEngine.ts).
+  - Depth from normal force, material hardness in MPa, tool-hardness penalty, and contact-patch area lookup (src/utils/SimulationEngine.ts).
   - Elastic-plastic response with per-cell plastic strain, elastic recovery, and strain hardening (src/utils/elasticPlastic.ts, src/utils/SimulationEngine.ts).
   - Springback characteristic length derived from contact patch size (LUT per tool kernel) (src/utils/SimulationEngine.ts).
-  - Pile‑up via displaced volume distributed into rings (src/utils/SimulationEngine.ts).
+  - Pile‑up via displaced cell volume distributed into rings (src/utils/SimulationEngine.ts).
   - Chatter as a simple sinusoidal vibration in time (src/utils/SimulationEngine.ts).
   - Tool edge micro-geometry and striations applied across tool width (src/utils/striations.ts, src/utils/SimulationEngine.ts).
-  - Base surface noise (fixed sinusoidal + random noise) (src/utils/SimulationEngine.ts).
+  - Path-local high-resolution striation detail map at 240 samples/mm, rendered separately from the coarse geometry so fine striae are not limited by mesh vertex spacing.
+  - Base surface noise from millimeter-coordinate sinusoidal texture plus coordinate-stable noise (src/utils/SimulationEngine.ts).
 
   Partially implemented
 
   - Tests cover the elastic-plastic module, striation generation, and key full simulation invariants.
   - Render resolution is capped in the UI to avoid creating browser-hostile geometry sizes until tiled/decimated rendering exists.
+  - Fine striation detail is currently a straight strip over the tool path; it does not yet follow tremor curvature sample-by-sample.
 
   Not implemented
 
