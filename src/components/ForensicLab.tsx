@@ -240,7 +240,7 @@ const MaterialSurface: React.FC<{
     // 1. Create Tool Kernel
     let toolSize = 6;
     if (toolType === 'crowbar') toolSize = 10;
-    if (toolType === 'knife') toolSize = 1;
+    if (toolType === 'knife') toolSize = 4;
     if (toolType === 'hammer_face') toolSize = 25;
     if (toolType === 'hammer_claw') toolSize = 30;
     if (toolType === 'spoon') toolSize = 30;

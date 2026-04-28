@@ -152,6 +152,9 @@ const TOOL_SHEAR_CONFIG: Record<string, ToolShearConstants> = {
     spoon: { shearEfficiency: 0.3, edgeDragFactor: 0.95 },
 };
 
+const KNIFE_EDGE_RADIUS_MM = 0.015;
+const KNIFE_BEVEL_HALF_ANGLE_DEG = 17;
+
 export const buildSurfaceMeshIndices = (width: number, height: number, detached: Uint8Array): Uint32Array => {
     if (!Number.isInteger(width) || width <= 1) {
         throw new Error('width must be an integer greater than 1');
@@ -389,10 +392,17 @@ export class ForensicPhysicsEngine {
                     else z = Math.abs(toolDy) > (sizeMM/2 - 0.2) ? (Math.abs(toolDy) - (sizeMM/2 - 0.2)) : 0;
                     sharpness = 0.3;
                 } else if (type === 'knife') {
-                    // Blade aligned with motion? Or perpendicular (scraping)?
-                    // Usually knives cut ALONG the motion.
-                    // V-shape based on perpendicular distance (toolDy)
-                    z = Math.abs(toolDy) * 2; 
+                    const edgeRadius = KNIFE_EDGE_RADIUS_MM + wear * 0.08;
+                    const bevelSlope = Math.tan(this.degreesToRadians(KNIFE_BEVEL_HALF_ANGLE_DEG + wear * 18));
+                    const edgeDistance = Math.abs(toolDy);
+                    const alongLimit = sizeMM * 2.5;
+                    if (Math.abs(toolDx) > alongLimit) {
+                        z = 999;
+                    } else if (edgeDistance <= edgeRadius) {
+                        z = (edgeDistance * edgeDistance) / (2 * edgeRadius);
+                    } else {
+                        z = (edgeRadius / 2) + (edgeDistance - edgeRadius) * bevelSlope;
+                    }
                     sharpness = 0.95;
                 } else if (type === 'crowbar') {
                     // Round tip
