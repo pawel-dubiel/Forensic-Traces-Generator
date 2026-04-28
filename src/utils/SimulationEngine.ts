@@ -12,6 +12,20 @@ export interface SurfaceMap {
     data: Float64Array; // High-precision Height values (Z)
 }
 
+export interface SurfaceDetailMap {
+    lengthMm: number;
+    widthMm: number;
+    resolution: number; // samples per mm
+    lengthSamples: number;
+    widthSamples: number;
+    originX: number;
+    originY: number;
+    directionDeg: number;
+    data: Float32Array; // Fine height offsets in mm, stored length-major
+    minHeight: number;
+    maxHeight: number;
+}
+
 export interface ToolKernel {
     profile: Float64Array; // 2D grid of the tool tip's Z offsets relative to tool center
     width: number; // grid units
@@ -102,6 +116,7 @@ export class ForensicPhysicsEngine {
     private random!: () => number;
     private randomSeed: number;
     private toolPath: ToolPathPoint[];
+    private surfaceDetailMap: SurfaceDetailMap | null;
 
     constructor(widthMM: number, heightMM: number, resolution: number, randomSeed: number) {
         this.validatePositiveFinite(widthMM, 'widthMM');
@@ -158,10 +173,15 @@ export class ForensicPhysicsEngine {
         this.generateBaseTopography();
         this.plasticStrain.fill(0);
         this.toolPath = [];
+        this.surfaceDetailMap = null;
     }
 
     getToolPath(): ToolPathPoint[] {
         return this.toolPath.slice();
+    }
+
+    getSurfaceDetailMap(): SurfaceDetailMap | null {
+        return this.surfaceDetailMap;
     }
 
     private resetRandom() {
@@ -429,6 +449,7 @@ export class ForensicPhysicsEngine {
         const pathSampleStep = 0.25;
         let lastSampleDist = -pathSampleStep;
         this.toolPath = [];
+        this.surfaceDetailMap = null;
         this.toolPath.push({ x: cx, y: cy, toolZ: -penetration, time: 0 });
         
         // CORRECTION 2: Natural Frequency Chatter
@@ -488,6 +509,18 @@ export class ForensicPhysicsEngine {
             }
         }
 
+        if (penetration > 0) {
+            this.surfaceDetailMap = this.createSurfaceDetailMap(
+                startX,
+                startY,
+                angleDir,
+                totalDist,
+                toolKernel,
+                penetration,
+                chatterParam
+            );
+        }
+
         yield 100;
     }
 
@@ -501,6 +534,7 @@ export class ForensicPhysicsEngine {
         characteristicLength: number
     ) {
         const res = this.surface.resolution;
+        const cellAreaMm2 = 1 / (res * res);
         const gx = Math.floor(cx * res);
         const gy = Math.floor(cy * res);
         
@@ -686,6 +720,66 @@ export class ForensicPhysicsEngine {
                 this.surface.data[idx] += val;
             }
         }
+    }
+
+    private createSurfaceDetailMap(
+        originX: number,
+        originY: number,
+        directionDeg: number,
+        lengthMm: number,
+        kernel: ToolKernel,
+        penetration: number,
+        chatterParam: number
+    ): SurfaceDetailMap {
+        this.validateFinite(originX, 'originX');
+        this.validateFinite(originY, 'originY');
+        this.validateFinite(directionDeg, 'directionDeg');
+        this.validatePositiveFinite(lengthMm, 'lengthMm');
+        this.validateToolKernel(kernel);
+        this.validatePositiveFinite(penetration, 'penetration');
+        this.validateRange(chatterParam, 'chatterParam', 0, 1);
+
+        const widthMm = Math.min(MAX_DETAIL_WIDTH_MM, Math.max(1 / DETAIL_MAP_RESOLUTION, kernel.height / this.surface.resolution));
+        const lengthSamples = Math.max(2, Math.ceil(lengthMm * DETAIL_MAP_RESOLUTION));
+        const widthSamples = Math.max(2, Math.ceil(widthMm * DETAIL_MAP_RESOLUTION));
+        const data = new Float32Array(lengthSamples * widthSamples);
+        const striationScale = Math.min(1, penetration / 0.2);
+        let minHeight = Infinity;
+        let maxHeight = -Infinity;
+
+        for (let y = 0; y < widthSamples; y++) {
+            const acrossMm = widthSamples === 1
+                ? 0
+                : (y / (widthSamples - 1) - 0.5) * widthMm;
+            const profilePosition = acrossMm + kernel.striationProfile.widthMm / 2;
+            const crossSection = getStriationOffset(kernel.striationProfile, profilePosition) * striationScale;
+
+            for (let x = 0; x < lengthSamples; x++) {
+                const alongMm = x / DETAIL_MAP_RESOLUTION;
+                const chatter = Math.sin(alongMm * (2 * Math.PI / 1.2)) * chatterParam * 0.003;
+                const waviness = Math.sin(alongMm * (2 * Math.PI / 0.34) + acrossMm * 1.7) * 0.0015 * kernel.sharpness;
+                const fade = Math.sin(Math.PI * x / (lengthSamples - 1));
+                const height = (crossSection + chatter + waviness) * Math.max(0, fade);
+                const idx = y * lengthSamples + x;
+                data[idx] = height;
+                if (height < minHeight) minHeight = height;
+                if (height > maxHeight) maxHeight = height;
+            }
+        }
+
+        return {
+            lengthMm,
+            widthMm,
+            resolution: DETAIL_MAP_RESOLUTION,
+            lengthSamples,
+            widthSamples,
+            originX,
+            originY,
+            directionDeg,
+            data,
+            minHeight,
+            maxHeight
+        };
     }
 
     private getCharacteristicLength(kernel: ToolKernel, penetrationDepth: number): number {
