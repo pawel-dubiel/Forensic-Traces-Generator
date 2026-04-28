@@ -1,4 +1,5 @@
 import React from 'react';
+import { useMemo } from 'react';
 import * as THREE from 'three';
 
 // Materials
@@ -41,17 +42,47 @@ export const ScrewdriverModel: React.FC = () => {
 };
 
 export const KnifeModel: React.FC = () => {
+    const bladeGeometry = useMemo(() => {
+        const geometry = new THREE.BufferGeometry();
+        const halfThickness = 1.2;
+        const halfWidth = 10;
+        const length = 100;
+        const tipY = 0;
+        const spineY = length;
+        const vertices = new Float32Array([
+            -halfThickness, tipY, 0,
+            halfThickness, tipY, 0,
+            -halfThickness, spineY, -halfWidth,
+            halfThickness, spineY, -halfWidth,
+            -halfThickness, spineY, halfWidth,
+            halfThickness, spineY, halfWidth,
+        ]);
+        const indices = [
+            0, 2, 4,
+            1, 5, 3,
+            0, 1, 3,
+            0, 3, 2,
+            0, 4, 5,
+            0, 5, 1,
+            2, 3, 5,
+            2, 5, 4,
+        ];
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+        return geometry;
+    }, []);
+
     return (
         <group rotation={[Math.PI, 0, 0]}>
-            <mesh position={[0, 50, 0]} material={steelMaterial}>
-                 <boxGeometry args={[2, 100, 20]} /> 
-            </mesh>
+            <mesh geometry={bladeGeometry} material={steelMaterial} />
             <mesh position={[0, 110, 0]} material={blackMetalMaterial}>
                 <boxGeometry args={[10, 30, 25]} />
             </mesh>
-             <mesh position={[0, 1, 0]}>
-                <boxGeometry args={[0.5, 100, 0.5]} />
-                <meshBasicMaterial color="#ffff00" opacity={0.5} transparent />
+            <mesh position={[0, 50, 0]}>
+                <boxGeometry args={[0.18, 100, 0.18]} />
+                <meshBasicMaterial color="#d8f7ff" opacity={0.72} transparent />
             </mesh>
         </group>
     );
