@@ -306,33 +306,12 @@ export class ForensicPhysicsEngine {
         const dirX = Math.cos(rad);
         const dirY = Math.sin(rad);
         const velocity = speed; // mm/s
-        // CORRECTION 1: Non-Linear Contact Mechanics (Meyer's Law / Hardness)
-        // Depth d is related to Force F. 
-        // For Sharp (Cone/Wedge): F = k * d^2  ->  d = sqrt(F/k)
-        // For Blunt (Flat Punch): F = k * d    ->  d = F/k
-        // We assume a hybrid based on tool sharpness.
-        // Base penetration (Linear ref)
         const angleRad = this.degreesToRadians(toolKernel.angleDeg);
         const normalForce = force * Math.sin(angleRad);
-        const hardnessMPa = mat.hardness * 1000; // Arbitrary scale
-        const hardnessRatio = this.computeToolMaterialHardnessRatio(toolHardnessMohs, mat.mohsHardness);
-        const effectiveForce = normalForce * hardnessRatio;
-        const baseDepth = effectiveForce / hardnessMPa;
-        // Adjust based on tool profile
-        // Sharp tools (Knife) follow Square Root law (penetrate easier initially, harder deeper)
-        // Blunt tools (Hammer) follow Linear law
-        let penetration = 0;
-        if (effectiveForce > 0) {
-            if (toolKernel.sharpness > 0.8) {
-                // Knife/Sharp: Power law 0.5
-                // Scaling factor to match visual expectations
-                penetration = Math.sqrt(baseDepth) * 2.0;
-            }
-            else {
-                // Blunt: Linear-ish
-                penetration = baseDepth * 2.0;
-            }
-        }
+        const hardnessFactor = this.computeToolHardnessFactor(toolHardnessMohs, mat.hardnessMPa);
+        const effectiveNormalForce = normalForce * hardnessFactor;
+        const targetContactAreaMm2 = effectiveNormalForce / mat.hardnessMPa;
+        const penetration = this.getDepthForContactArea(toolKernel, targetContactAreaMm2);
         // Fracture Threshold
         const fractureThreshold = 0.5;
         let stepsTaken = 0;
@@ -626,15 +605,17 @@ export class ForensicPhysicsEngine {
         const lut = [];
         const res = this.surface.resolution;
         for (let i = 0; i < samples; i++) {
-            const depth = (i / (samples - 1)) * maxProfileDepth;
+            const depth = ((i + 1) / samples) * maxProfileDepth;
             let minX = width;
             let maxX = -1;
             let minY = height;
             let maxY = -1;
+            let contactCells = 0;
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
                     const val = kernel[y * width + x];
                     if (val < 500 && val <= depth) {
+                        contactCells++;
                         if (x < minX)
                             minX = x;
                         if (x > maxX)
@@ -651,10 +632,14 @@ export class ForensicPhysicsEngine {
             }
             const widthMm = (maxX - minX + 1) / res;
             const heightMm = (maxY - minY + 1) / res;
+            const areaMm2 = contactCells / (res * res);
             if (!Number.isFinite(widthMm) || widthMm <= 0 || !Number.isFinite(heightMm) || heightMm <= 0) {
                 throw new Error('contact patch dimensions must be positive finite numbers');
             }
-            lut.push({ depth, widthMm, heightMm });
+            if (!Number.isFinite(areaMm2) || areaMm2 <= 0) {
+                throw new Error('contact patch area must be positive finite');
+            }
+            lut.push({ depth, widthMm, heightMm, areaMm2 });
         }
         return { contactPatchLUT: lut, maxProfileDepth };
     }
