@@ -64,18 +64,23 @@ export class ForensicPhysicsEngine {
         this.randomSeed = randomSeed;
         this.resetRandom();
         this.toolPath = [];
+        this.surfaceDetailMap = null;
         this.generateBaseTopography();
     }
     generateBaseTopography() {
         const { width, height, data } = this.surface;
-        const freqX = 0.1;
-        const freqY = 0.005;
+        const res = this.surface.resolution;
+        const primaryAngular = (2 * Math.PI) / 1.05;
+        const secondaryAngular = (2 * Math.PI) / 0.42;
+        const grainAngular = (2 * Math.PI) / 30;
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const idx = y * width + x;
-                const noise = Math.sin(x * freqX * 2) * 0.005 +
-                    Math.sin(x * freqX * 5 + y * freqY) * 0.002 +
-                    (this.random() - 0.5) * 0.002;
+                const xMm = x / res;
+                const yMm = y / res;
+                const noise = Math.sin(xMm * primaryAngular) * 0.005 +
+                    Math.sin(xMm * secondaryAngular + yMm * grainAngular) * 0.002 +
+                    (this.coordinateNoise(xMm, yMm) - 0.5) * 0.002;
                 data[idx] = noise;
             }
         }
@@ -758,5 +763,14 @@ export class ForensicPhysicsEngine {
     degreesToRadians(degrees) {
         this.validateFinite(degrees, 'degrees');
         return degrees * Math.PI / 180;
+    }
+    coordinateNoise(xMm, yMm) {
+        const xi = Math.round(xMm * 1000);
+        const yi = Math.round(yMm * 1000);
+        let state = (xi * 374761393 + yi * 668265263 + this.randomSeed * 1442695041) >>> 0;
+        state = (state ^ (state >>> 13)) >>> 0;
+        state = Math.imul(state, 1274126177) >>> 0;
+        state = (state ^ (state >>> 16)) >>> 0;
+        return state / 0x100000000;
     }
 }
