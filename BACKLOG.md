@@ -2,9 +2,9 @@
 
 ## P0 - Correctness And Model Integrity
 
-- Add a tangential friction/shear model so drag force, friction coefficient, and material response affect groove shape.
-- Make `Tool Speed` physically meaningful by coupling it to chatter wavelength, stick-slip, strain-rate effects, and tearing.
-- Replace visual/random brittle cracking with a fracture model using fracture toughness, stress intensity, and material anisotropy.
+- Calibrate the tangential friction/shear model against measured groove asymmetry, pile-up, and tearing.
+- Extend `Tool Speed` coupling with strain-rate material response and validate chatter wavelength against known ranges.
+- Validate the local continuum-damage fracture model against fracture toughness, stress intensity, and perforation thresholds.
 - Add integration tests for volume accounting, especially pile-up near surface boundaries where material can be clipped.
 - Add regression tests that compare representative groove width/depth against expected ranges for each tool/material pair.
 
@@ -14,12 +14,12 @@
 - Add asymmetric edge defects, burrs, bevel angle, edge radius, and worn/chipped tool geometry.
 - Model tool wear evolution during a pass, especially when a softer or damaged tool contacts harder materials.
 - Add multi-pass interactions: re-entry, hesitation, slip, overrun, repeated scraping, and partially overlapping marks.
-- Add material transfer and debris: metal flakes, wood fibers, smeared material, and loose chips.
+- Extend material transfer and debris beyond deposited heightfields: metal flakes, wood fibers, smeared transfer, and loose chip bodies.
 
 ## P2 - Material Realism
 
 - Add anisotropic base materials: wood grain, brushed metal, rolled sheet direction, and machined finish.
-- Add material-specific friction coefficients and ductility/fracture parameters.
+- Calibrate material-specific friction coefficients, ductility, fracture energy, tensile strength, critical strain, and thickness defaults from reference data.
 - Add thermal effects for high speed or high friction: softening, burnishing, smearing, and wood darkening.
 - Calibrate material constants from reference data instead of using broad plausible values.
 - Separate display material labels from calculation materials/alloys, e.g. mild steel vs hardened steel.
@@ -39,6 +39,7 @@
 - Tile high-resolution detail maps for long or curved paths.
 - Add deterministic simulation snapshots for debugging and test fixtures.
 - Split physics constants, tool definitions, and render-only code into separate modules.
+- Consider a FEM/MPM research path for non-interactive high-fidelity fracture comparisons.
 
 ## Validation Backlog
 
