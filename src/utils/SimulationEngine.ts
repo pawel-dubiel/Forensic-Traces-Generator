@@ -26,6 +26,13 @@ export interface SurfaceDetailMap {
     maxHeight: number;
 }
 
+export interface FractureState {
+    damage: Float32Array;
+    detached: Uint8Array;
+    edgeLift: Float32Array;
+    debrisHeight: Float32Array;
+}
+
 export interface ToolKernel {
     profile: Float64Array; // 2D grid of the tool tip's Z offsets relative to tool center
     width: number; // grid units
@@ -79,6 +86,11 @@ interface MaterialConstants {
     frictionCoefficient: number;
     shearStrengthMPa: number;
     smearFactor: number;
+    tensileStrengthMPa: number;
+    fractureEnergyNPerMm: number;
+    criticalPlasticStrain: number;
+    densityMgPerMm3: number;
+    defaultThicknessMm: number;
 }
 
 interface ToolShearConstants {
@@ -99,11 +111,11 @@ interface ShearResponse {
 // Material constants for the simulation loop
 export const MATERIALS: Record<MaterialType, MaterialConstants> = {
     // Brittleness: 0 = Clay (100% Flow), 1 = Glass (100% Fracture/Chip)
-    aluminum: { hardnessMPa: 245, mohsHardness: 2.75, flow: 0.8, brittleness: 0.1, frictionCoefficient: 0.47, shearStrengthMPa: 70, smearFactor: 0.65 },
-    brass: { hardnessMPa: 900, mohsHardness: 3.0, flow: 0.6, brittleness: 0.2, frictionCoefficient: 0.42, shearStrengthMPa: 180, smearFactor: 0.45 },
-    steel: { hardnessMPa: 1800, mohsHardness: 5.5, flow: 0.3, brittleness: 0.1, frictionCoefficient: 0.35, shearStrengthMPa: 260, smearFactor: 0.25 },
-    wood: { hardnessMPa: 40, mohsHardness: 2.0, flow: 0.1, brittleness: 0.9, frictionCoefficient: 0.62, shearStrengthMPa: 12, smearFactor: 0.15 }, // High brittleness = Splintering
-    gold: { hardnessMPa: 220, mohsHardness: 2.5, flow: 0.95, brittleness: 0.0, frictionCoefficient: 0.55, shearStrengthMPa: 45, smearFactor: 0.85 }, // Very ductile, piles up easily
+    aluminum: { hardnessMPa: 245, mohsHardness: 2.75, flow: 0.8, brittleness: 0.1, frictionCoefficient: 0.47, shearStrengthMPa: 70, smearFactor: 0.65, tensileStrengthMPa: 110, fractureEnergyNPerMm: 18, criticalPlasticStrain: 0.12, densityMgPerMm3: 2.7, defaultThicknessMm: 1.2 },
+    brass: { hardnessMPa: 900, mohsHardness: 3.0, flow: 0.6, brittleness: 0.2, frictionCoefficient: 0.42, shearStrengthMPa: 180, smearFactor: 0.45, tensileStrengthMPa: 250, fractureEnergyNPerMm: 26, criticalPlasticStrain: 0.09, densityMgPerMm3: 8.5, defaultThicknessMm: 1.2 },
+    steel: { hardnessMPa: 1800, mohsHardness: 5.5, flow: 0.3, brittleness: 0.1, frictionCoefficient: 0.35, shearStrengthMPa: 260, smearFactor: 0.25, tensileStrengthMPa: 400, fractureEnergyNPerMm: 55, criticalPlasticStrain: 0.16, densityMgPerMm3: 7.85, defaultThicknessMm: 1.5 },
+    wood: { hardnessMPa: 40, mohsHardness: 2.0, flow: 0.1, brittleness: 0.9, frictionCoefficient: 0.62, shearStrengthMPa: 12, smearFactor: 0.15, tensileStrengthMPa: 35, fractureEnergyNPerMm: 2.2, criticalPlasticStrain: 0.025, densityMgPerMm3: 0.55, defaultThicknessMm: 1.0 }, // High brittleness = Splintering
+    gold: { hardnessMPa: 220, mohsHardness: 2.5, flow: 0.95, brittleness: 0.0, frictionCoefficient: 0.55, shearStrengthMPa: 45, smearFactor: 0.85, tensileStrengthMPa: 120, fractureEnergyNPerMm: 32, criticalPlasticStrain: 0.22, densityMgPerMm3: 19.3, defaultThicknessMm: 1.0 }, // Very ductile, piles up easily
 };
 
 const MOHS_TO_HARDNESS_MPA = [
@@ -140,9 +152,64 @@ const TOOL_SHEAR_CONFIG: Record<string, ToolShearConstants> = {
     spoon: { shearEfficiency: 0.3, edgeDragFactor: 0.95 },
 };
 
+export const buildSurfaceMeshIndices = (width: number, height: number, detached: Uint8Array): Uint32Array => {
+    if (!Number.isInteger(width) || width <= 1) {
+        throw new Error('width must be an integer greater than 1');
+    }
+    if (!Number.isInteger(height) || height <= 1) {
+        throw new Error('height must be an integer greater than 1');
+    }
+    if (!(detached instanceof Uint8Array)) {
+        throw new Error('detached must be a Uint8Array');
+    }
+    if (detached.length !== width * height) {
+        throw new Error('detached length must match width * height');
+    }
+
+    let indexCount = 0;
+    for (let y = 0; y < height - 1; y++) {
+        for (let x = 0; x < width - 1; x++) {
+            const a = y * width + x;
+            const b = a + 1;
+            const c = (y + 1) * width + x;
+            const d = c + 1;
+            if (detached[a] || detached[b] || detached[c] || detached[d]) {
+                continue;
+            }
+            indexCount += 6;
+        }
+    }
+
+    const indices = new Uint32Array(indexCount);
+    let out = 0;
+    for (let y = 0; y < height - 1; y++) {
+        for (let x = 0; x < width - 1; x++) {
+            const a = y * width + x;
+            const b = a + 1;
+            const c = (y + 1) * width + x;
+            const d = c + 1;
+            if (detached[a] || detached[b] || detached[c] || detached[d]) {
+                continue;
+            }
+            indices[out++] = a;
+            indices[out++] = c;
+            indices[out++] = b;
+            indices[out++] = b;
+            indices[out++] = c;
+            indices[out++] = d;
+        }
+    }
+
+    return indices;
+};
+
 export class ForensicPhysicsEngine {
     surface: SurfaceMap;
     private plasticStrain: Float32Array;
+    private damage: Float32Array;
+    private detached: Uint8Array;
+    private edgeLift: Float32Array;
+    private debrisHeight: Float32Array;
     private random!: () => number;
     private randomSeed: number;
     private toolPath: ToolPathPoint[];
@@ -170,6 +237,10 @@ export class ForensicPhysicsEngine {
             data: new Float64Array(w * h).fill(0)
         };
         this.plasticStrain = new Float32Array(w * h).fill(0);
+        this.damage = new Float32Array(w * h).fill(0);
+        this.detached = new Uint8Array(w * h).fill(0);
+        this.edgeLift = new Float32Array(w * h).fill(0);
+        this.debrisHeight = new Float32Array(w * h).fill(0);
         this.randomSeed = randomSeed;
         this.resetRandom();
         this.toolPath = [];
@@ -202,6 +273,10 @@ export class ForensicPhysicsEngine {
         this.resetRandom();
         this.generateBaseTopography();
         this.plasticStrain.fill(0);
+        this.damage.fill(0);
+        this.detached.fill(0);
+        this.edgeLift.fill(0);
+        this.debrisHeight.fill(0);
         this.toolPath = [];
         this.surfaceDetailMap = null;
     }
@@ -212,6 +287,15 @@ export class ForensicPhysicsEngine {
 
     getSurfaceDetailMap(): SurfaceDetailMap | null {
         return this.surfaceDetailMap;
+    }
+
+    getFractureState(): FractureState {
+        return {
+            damage: this.damage,
+            detached: this.detached,
+            edgeLift: this.edgeLift,
+            debrisHeight: this.debrisHeight
+        };
     }
 
     private resetRandom() {
@@ -434,6 +518,7 @@ export class ForensicPhysicsEngine {
         force: number, 
         toolKernel: ToolKernel,
         materialType: MaterialType,
+        materialThicknessMm: number,
         toolHardnessMohs: number,
         speed: number,
         chatterParam: number,
@@ -444,6 +529,7 @@ export class ForensicPhysicsEngine {
         this.validateFinite(angleDir, 'angleDir');
         this.validateNonNegativeFinite(force, 'force');
         this.validateToolKernel(toolKernel);
+        this.validatePositiveFinite(materialThicknessMm, 'materialThicknessMm');
         this.validateToolHardness(toolHardnessMohs);
         this.validatePositiveFinite(speed, 'speed');
         this.validateRange(chatterParam, 'chatterParam', 0, 1);
@@ -533,14 +619,12 @@ export class ForensicPhysicsEngine {
                 if (penetrationDepth > 0) {
                     const characteristicLength = this.getCharacteristicLength(toolKernel, penetrationDepth);
                     const substepScale = Math.min(1, stepDistance / maxSpatialStepMm);
-                    this.applyKernel(cx, cy, toolZ, toolKernel, mat, elasticPlastic, characteristicLength, shearResponse, substepScale);
+                    this.applyKernel(cx, cy, toolZ, toolKernel, mat, materialThicknessMm, elasticPlastic, characteristicLength, shearResponse, substepScale);
                 }
 
                 // 2. Fracture
                 if (mat.brittleness > 0.5 && Math.abs(toolZ) > fractureThreshold) {
-                    if (this.random() < mat.brittleness * 0.1) {
-                        this.generateCrack(cx, cy, dirX, dirY, Math.abs(toolZ) * 2, mat.brittleness);
-                    }
+                    this.generateCrack(cx, cy, dirX, dirY, Math.abs(toolZ) * 2, mat, materialThicknessMm, shearResponse);
                 }
 
                 if (currentDist - lastSampleDist >= pathSampleStep) {
@@ -588,11 +672,14 @@ export class ForensicPhysicsEngine {
         cz: number,
         kernel: ToolKernel,
         mat: MaterialConstants,
+        materialThicknessMm: number,
         elasticPlastic: ElasticPlasticModel,
         characteristicLength: number,
         shearResponse: ShearResponse,
         substepScale: number
     ) {
+        this.validateMaterialConstants(mat, 'material');
+        this.validatePositiveFinite(materialThicknessMm, 'materialThicknessMm');
         this.validateRange(substepScale, 'substepScale', 0, 1);
         const res = this.surface.resolution;
         const cellAreaMm2 = 1 / (res * res);
@@ -613,6 +700,9 @@ export class ForensicPhysicsEngine {
                 
                 if (mapX >= 0 && mapX < this.surface.width && mapY >= 0 && mapY < this.surface.height) {
                     const idx = mapY * this.surface.width + mapX;
+                    if (this.detached[idx]) {
+                        continue;
+                    }
                     const toolHeight = cz + kernel.profile[ky * kernel.width + kx];
                     const currentHeight = this.surface.data[idx];
                     
@@ -637,6 +727,19 @@ export class ForensicPhysicsEngine {
                             this.surface.data[idx] = newHeight;
                             if (Math.abs(newHeight) > maxDepth) maxDepth = Math.abs(newHeight);
                             this.applyShearSmear(mapX, mapY, result.permanentDepth, shearResponse, substepScale);
+                            this.accumulateDamage(
+                                mapX,
+                                mapY,
+                                penetration,
+                                result.permanentDepth,
+                                result.plasticStrainIncrement,
+                                characteristicLength,
+                                cellAreaMm2,
+                                materialThicknessMm,
+                                mat,
+                                shearResponse,
+                                substepScale
+                            );
                         }
 
                         if (result.plasticStrainIncrement > 0) {
@@ -714,55 +817,51 @@ export class ForensicPhysicsEngine {
         }
     }
 
-    private generateCrack(cx: number, cy: number, dirX: number, dirY: number, energy: number, brittleness: number) {
+    private generateCrack(
+        cx: number,
+        cy: number,
+        dirX: number,
+        dirY: number,
+        energy: number,
+        mat: MaterialConstants,
+        materialThicknessMm: number,
+        shearResponse: ShearResponse
+    ) {
         const res = this.surface.resolution;
         let x = cx;
         let y = cy;
         
-        // Crack shoots out semi-randomly but biased away from the cut direction
-        // Normal to cut is (-dirY, dirX)
         const normalX = -dirY;
         const normalY = dirX;
-        
-        // Randomly choose left or right side + random spread
-        const side = this.random() > 0.5 ? 1 : -1;
-        const spread = (this.random() - 0.5) * 1.0; // +/- 0.5 rad spread
-        
-        // Rotate vector by spread
-        const cosS = Math.cos(spread);
-        const sinS = Math.sin(spread);
-        const randNormalX = normalX * cosS - normalY * sinS;
-        const randNormalY = normalX * sinS + normalY * cosS;
-
-        const crackDirX = randNormalX * side;
-        const crackDirY = randNormalY * side;
-        
-        // Normalize
+        const side = ((normalX * shearResponse.trailingX) + (normalY * shearResponse.trailingY)) >= 0 ? 1 : -1;
+        const crackDirX = normalX * side;
+        const crackDirY = normalY * side;
         const len = Math.sqrt(crackDirX*crackDirX + crackDirY*crackDirY);
         const cDx = crackDirX / len;
         const cDy = crackDirY / len;
         
-        const length = energy * 5 * brittleness; // Crack length in mm
+        const length = energy * 4 * mat.brittleness;
         const steps = Math.floor(length * res);
+        const cellAreaMm2 = 1 / (res * res);
         
-        // Walk the crack
         for(let i=0; i<steps; i++) {
             x += cDx * (1/res);
             y += cDy * (1/res);
-            
-            // Jitter path (lightning bolt style)
-            x += (this.random() - 0.5) * 0.05;
-            y += (this.random() - 0.5) * 0.05;
 
             const gx = Math.floor(x * res);
             const gy = Math.floor(y * res);
             
             if (gx >= 0 && gx < this.surface.width && gy >= 0 && gy < this.surface.height) {
                 const idx = gy * this.surface.width + gx;
-                // Crack is a thin deep fissure
-                // Depth tapers off
-                const depth = (1 - (i/steps)) * 0.2; // up to 0.2mm deep crack
-                this.surface.data[idx] -= depth;
+                if (this.detached[idx]) {
+                    continue;
+                }
+                const taper = 1 - (i / Math.max(1, steps));
+                this.damage[idx] = Math.min(1, this.damage[idx] + taper * mat.brittleness * 0.18);
+                this.edgeLift[idx] = Math.min(materialThicknessMm * 0.2, this.edgeLift[idx] + taper * mat.brittleness * 0.01);
+                if (this.damage[idx] >= 1) {
+                    this.detachCell(gx, gy, cellAreaMm2, materialThicknessMm, energy * 0.1 * taper, mat, shearResponse);
+                }
             }
         }
     }
@@ -774,6 +873,9 @@ export class ForensicPhysicsEngine {
                  const mapY = startY + ky;
                  if (mapX >= 0 && mapX < this.surface.width && mapY >= 0 && mapY < this.surface.height) {
                      const idx = mapY * this.surface.width + mapX;
+                     if (this.detached[idx]) {
+                         continue;
+                     }
                      // Only roughen if it's actually cut (negative Z)
                      if (this.surface.data[idx] < -0.01) {
                          this.surface.data[idx] += (this.random() - 0.5) * amount;
@@ -797,8 +899,229 @@ export class ForensicPhysicsEngine {
     private safeAdd(x: number, y: number, val: number) {
         if (x >= 0 && x < this.surface.width && y >= 0 && y < this.surface.height) {
             const idx = y * this.surface.width + x;
-            if (this.surface.data[idx] > -0.5) { 
+            if (!this.detached[idx] && this.surface.data[idx] > -0.5) {
                 this.surface.data[idx] += val;
+            }
+        }
+    }
+
+    private accumulateDamage(
+        mapX: number,
+        mapY: number,
+        penetration: number,
+        permanentDepth: number,
+        plasticStrainIncrement: number,
+        characteristicLength: number,
+        cellAreaMm2: number,
+        materialThicknessMm: number,
+        mat: MaterialConstants,
+        shearResponse: ShearResponse,
+        substepScale: number
+    ) {
+        this.validateNonNegativeFinite(penetration, 'penetration');
+        this.validateNonNegativeFinite(permanentDepth, 'permanentDepth');
+        this.validateNonNegativeFinite(plasticStrainIncrement, 'plasticStrainIncrement');
+        this.validatePositiveFinite(characteristicLength, 'characteristicLength');
+        this.validatePositiveFinite(cellAreaMm2, 'cellAreaMm2');
+        this.validatePositiveFinite(materialThicknessMm, 'materialThicknessMm');
+        this.validateRange(substepScale, 'substepScale', 0, 1);
+
+        const idx = mapY * this.surface.width + mapX;
+        if (this.detached[idx] || permanentDepth <= 0 || substepScale <= 0) {
+            return;
+        }
+
+        const totalStrain = penetration / characteristicLength;
+        const normalStressMPa = Math.min(mat.hardnessMPa * 1.5, totalStrain * mat.hardnessMPa);
+        const shearStressMPa = shearResponse.stressRatio * mat.shearStrengthMPa;
+        const equivalentStressMPa = Math.sqrt((normalStressMPa * normalStressMPa) + (3 * shearStressMPa * shearStressMPa));
+        const overloadStressMPa = Math.max(0, equivalentStressMPa - mat.tensileStrengthMPa);
+
+        const cellWidthMm = Math.sqrt(cellAreaMm2);
+        const fractureAreaMm2 = cellWidthMm * materialThicknessMm;
+        const requiredWorkNmm = mat.fractureEnergyNPerMm * fractureAreaMm2;
+        const drivingWorkNmm = overloadStressMPa * permanentDepth * cellAreaMm2 * (1 + shearResponse.stressRatio * 0.2);
+        const energyRatio = requiredWorkNmm > 0 ? drivingWorkNmm / requiredWorkNmm : 0;
+
+        const accumulatedPlasticStrain = this.plasticStrain[idx] + plasticStrainIncrement;
+        const plasticExcess = Math.max(0, accumulatedPlasticStrain - mat.criticalPlasticStrain);
+        const brittleDamage = energyRatio * (0.45 + mat.brittleness * 1.35);
+        const ductileDamage = (plasticExcess / mat.criticalPlasticStrain) * mat.flow * Math.max(energyRatio, permanentDepth / materialThicknessMm);
+        const breakthroughDamage = Math.max(0, (permanentDepth - materialThicknessMm * 0.35) / materialThicknessMm) * (0.25 + mat.brittleness);
+        const damageIncrement = (brittleDamage + ductileDamage + breakthroughDamage) * substepScale;
+
+        if (damageIncrement <= 0) {
+            return;
+        }
+
+        this.damage[idx] = Math.min(1, this.damage[idx] + damageIncrement);
+        this.propagateCrackDamage(mapX, mapY, damageIncrement, mat, shearResponse);
+
+        if (this.damage[idx] >= 1) {
+            this.detachCell(mapX, mapY, cellAreaMm2, materialThicknessMm, permanentDepth, mat, shearResponse);
+        }
+    }
+
+    private propagateCrackDamage(
+        mapX: number,
+        mapY: number,
+        damageIncrement: number,
+        mat: MaterialConstants,
+        shearResponse: ShearResponse
+    ) {
+        if (damageIncrement <= 0) {
+            return;
+        }
+
+        let bestX = mapX;
+        let bestY = mapY;
+        let bestScore = -Infinity;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) {
+                    continue;
+                }
+                const nx = mapX + dx;
+                const ny = mapY + dy;
+                if (nx < 0 || nx >= this.surface.width || ny < 0 || ny >= this.surface.height) {
+                    continue;
+                }
+                const nIdx = ny * this.surface.width + nx;
+                if (this.detached[nIdx]) {
+                    continue;
+                }
+
+                const len = Math.hypot(dx, dy);
+                const alignment = ((dx / len) * shearResponse.trailingX) + ((dy / len) * shearResponse.trailingY);
+                const score = this.damage[nIdx] * 0.6 + alignment * 0.3 + mat.brittleness * Math.abs(dx / len) * 0.1;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestX = nx;
+                    bestY = ny;
+                }
+            }
+        }
+
+        if (bestScore === -Infinity) {
+            return;
+        }
+
+        const bestIdx = bestY * this.surface.width + bestX;
+        const propagated = damageIncrement * (0.18 + mat.brittleness * 0.28);
+        this.damage[bestIdx] = Math.min(1, this.damage[bestIdx] + propagated);
+    }
+
+    private detachCell(
+        mapX: number,
+        mapY: number,
+        cellAreaMm2: number,
+        materialThicknessMm: number,
+        permanentDepth: number,
+        mat: MaterialConstants,
+        shearResponse: ShearResponse
+    ) {
+        const idx = mapY * this.surface.width + mapX;
+        if (this.detached[idx]) {
+            return;
+        }
+
+        this.detached[idx] = 1;
+        this.damage[idx] = 1;
+        this.edgeLift[idx] = 0;
+        this.debrisHeight[idx] = 0;
+        this.surface.data[idx] = Math.min(this.surface.data[idx], -materialThicknessMm);
+
+        const detachedVolumeMm3 = cellAreaMm2 * materialThicknessMm;
+        const debrisFraction = Math.min(0.75, 0.22 + mat.flow * 0.28 + mat.brittleness * 0.18);
+        this.depositDebris(mapX, mapY, detachedVolumeMm3 * debrisFraction, cellAreaMm2, shearResponse);
+        this.liftFractureEdges(mapX, mapY, materialThicknessMm, permanentDepth, mat, shearResponse);
+    }
+
+    private depositDebris(
+        mapX: number,
+        mapY: number,
+        volumeMm3: number,
+        cellAreaMm2: number,
+        shearResponse: ShearResponse
+    ) {
+        if (volumeMm3 <= 0) {
+            return;
+        }
+
+        const offsetCells = Math.max(1, Math.round((1.5 + shearResponse.lateralDisplacement) * this.surface.resolution));
+        const centerX = mapX + Math.round(shearResponse.trailingX * offsetCells);
+        const centerY = mapY + Math.round(shearResponse.trailingY * offsetCells);
+        const radius = Math.max(1, Math.ceil(0.5 * this.surface.resolution));
+
+        let totalWeightedAreaMm2 = 0;
+        for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+                if (x < 0 || x >= this.surface.width || y < 0 || y >= this.surface.height) {
+                    continue;
+                }
+                const idx = y * this.surface.width + x;
+                if (this.detached[idx]) {
+                    continue;
+                }
+                const distance = Math.hypot(x - centerX, y - centerY);
+                if (distance <= radius) {
+                    totalWeightedAreaMm2 += (1 - distance / (radius + 1)) * cellAreaMm2;
+                }
+            }
+        }
+
+        if (totalWeightedAreaMm2 <= 0) {
+            return;
+        }
+
+        for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+                if (x < 0 || x >= this.surface.width || y < 0 || y >= this.surface.height) {
+                    continue;
+                }
+                const idx = y * this.surface.width + x;
+                if (this.detached[idx]) {
+                    continue;
+                }
+                const distance = Math.hypot(x - centerX, y - centerY);
+                if (distance <= radius) {
+                    const weight = 1 - distance / (radius + 1);
+                    this.debrisHeight[idx] += (volumeMm3 * weight) / totalWeightedAreaMm2;
+                }
+            }
+        }
+    }
+
+    private liftFractureEdges(
+        mapX: number,
+        mapY: number,
+        materialThicknessMm: number,
+        permanentDepth: number,
+        mat: MaterialConstants,
+        shearResponse: ShearResponse
+    ) {
+        const radius = 2;
+        const maxLift = materialThicknessMm * (0.18 + mat.flow * 0.28);
+        const baseLift = Math.min(maxLift, permanentDepth * (0.25 + mat.flow * 0.35) + materialThicknessMm * mat.brittleness * 0.035);
+
+        for (let y = mapY - radius; y <= mapY + radius; y++) {
+            for (let x = mapX - radius; x <= mapX + radius; x++) {
+                if (x < 0 || x >= this.surface.width || y < 0 || y >= this.surface.height) {
+                    continue;
+                }
+                const idx = y * this.surface.width + x;
+                if (this.detached[idx]) {
+                    continue;
+                }
+                const distance = Math.hypot(x - mapX, y - mapY);
+                if (distance <= 0 || distance > radius) {
+                    continue;
+                }
+                const dx = (x - mapX) / distance;
+                const dy = (y - mapY) / distance;
+                const shearBias = Math.max(0.35, 1 + dx * shearResponse.trailingX + dy * shearResponse.trailingY);
+                const lift = baseLift * (1 - distance / (radius + 1)) * shearBias;
+                this.edgeLift[idx] = Math.min(maxLift, this.edgeLift[idx] + lift);
             }
         }
     }
@@ -838,6 +1161,13 @@ export class ForensicPhysicsEngine {
         let totalWeightedAreaMm2 = 0;
         for (let y = centerY - radius; y <= centerY + radius; y++) {
             for (let x = centerX - radius; x <= centerX + radius; x++) {
+                if (x < 0 || x >= this.surface.width || y < 0 || y >= this.surface.height) {
+                    continue;
+                }
+                const idx = y * this.surface.width + x;
+                if (this.detached[idx]) {
+                    continue;
+                }
                 const distance = Math.hypot(x - centerX, y - centerY);
                 if (distance <= radius) {
                     totalWeightedAreaMm2 += (1 - distance / (radius + 1)) * cellAreaMm2;
@@ -851,6 +1181,13 @@ export class ForensicPhysicsEngine {
 
         for (let y = centerY - radius; y <= centerY + radius; y++) {
             for (let x = centerX - radius; x <= centerX + radius; x++) {
+                if (x < 0 || x >= this.surface.width || y < 0 || y >= this.surface.height) {
+                    continue;
+                }
+                const idx = y * this.surface.width + x;
+                if (this.detached[idx]) {
+                    continue;
+                }
                 const distance = Math.hypot(x - centerX, y - centerY);
                 if (distance <= radius) {
                     const weight = 1 - distance / (radius + 1);
@@ -1233,6 +1570,11 @@ export class ForensicPhysicsEngine {
         this.validateNonNegativeFinite(mat.frictionCoefficient, `${materialType}.frictionCoefficient`);
         this.validatePositiveFinite(mat.shearStrengthMPa, `${materialType}.shearStrengthMPa`);
         this.validateRange(mat.smearFactor, `${materialType}.smearFactor`, 0, 1);
+        this.validatePositiveFinite(mat.tensileStrengthMPa, `${materialType}.tensileStrengthMPa`);
+        this.validatePositiveFinite(mat.fractureEnergyNPerMm, `${materialType}.fractureEnergyNPerMm`);
+        this.validatePositiveFinite(mat.criticalPlasticStrain, `${materialType}.criticalPlasticStrain`);
+        this.validatePositiveFinite(mat.densityMgPerMm3, `${materialType}.densityMgPerMm3`);
+        this.validatePositiveFinite(mat.defaultThicknessMm, `${materialType}.defaultThicknessMm`);
     }
 
     private validateToolKernel(kernel: ToolKernel) {
