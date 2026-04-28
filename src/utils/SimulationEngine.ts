@@ -37,6 +37,9 @@ export interface ToolKernel {
     maxProfileDepth: number;
     striationProfile: StriationProfile;
     angleDeg: number;
+    type: string;
+    shearEfficiency: number;
+    edgeDragFactor: number;
 }
 
 export interface ToolPathPoint {
@@ -73,16 +76,34 @@ interface MaterialConstants {
     mohsHardness: number;
     flow: number;
     brittleness: number;
+    frictionCoefficient: number;
+    shearStrengthMPa: number;
+    smearFactor: number;
+}
+
+interface ToolShearConstants {
+    shearEfficiency: number;
+    edgeDragFactor: number;
+}
+
+interface ShearResponse {
+    stressRatio: number;
+    lateralDisplacement: number;
+    smearDepth: number;
+    asymmetricPileupBias: number;
+    tearRoughness: number;
+    trailingX: number;
+    trailingY: number;
 }
 
 // Material constants for the simulation loop
 export const MATERIALS: Record<MaterialType, MaterialConstants> = {
     // Brittleness: 0 = Clay (100% Flow), 1 = Glass (100% Fracture/Chip)
-    aluminum: { hardnessMPa: 245, mohsHardness: 2.75, flow: 0.8, brittleness: 0.1 },
-    brass: { hardnessMPa: 900, mohsHardness: 3.0, flow: 0.6, brittleness: 0.2 },
-    steel: { hardnessMPa: 1800, mohsHardness: 5.5, flow: 0.3, brittleness: 0.1 },
-    wood: { hardnessMPa: 40, mohsHardness: 2.0, flow: 0.1, brittleness: 0.9 }, // High brittleness = Splintering
-    gold: { hardnessMPa: 220, mohsHardness: 2.5, flow: 0.95, brittleness: 0.0 }, // Very ductile, piles up easily
+    aluminum: { hardnessMPa: 245, mohsHardness: 2.75, flow: 0.8, brittleness: 0.1, frictionCoefficient: 0.47, shearStrengthMPa: 70, smearFactor: 0.65 },
+    brass: { hardnessMPa: 900, mohsHardness: 3.0, flow: 0.6, brittleness: 0.2, frictionCoefficient: 0.42, shearStrengthMPa: 180, smearFactor: 0.45 },
+    steel: { hardnessMPa: 1800, mohsHardness: 5.5, flow: 0.3, brittleness: 0.1, frictionCoefficient: 0.35, shearStrengthMPa: 260, smearFactor: 0.25 },
+    wood: { hardnessMPa: 40, mohsHardness: 2.0, flow: 0.1, brittleness: 0.9, frictionCoefficient: 0.62, shearStrengthMPa: 12, smearFactor: 0.15 }, // High brittleness = Splintering
+    gold: { hardnessMPa: 220, mohsHardness: 2.5, flow: 0.95, brittleness: 0.0, frictionCoefficient: 0.55, shearStrengthMPa: 45, smearFactor: 0.85 }, // Very ductile, piles up easily
 };
 
 const MOHS_TO_HARDNESS_MPA = [
@@ -108,6 +129,15 @@ const TOOL_STRIATION_CONFIG: Record<string, { pitchMm: number; amplitudeMm: numb
     hammer_face: { pitchMm: 0.6, amplitudeMm: 0.012, irregularity: 0.6 },
     hammer_claw: { pitchMm: 0.28, amplitudeMm: 0.018, irregularity: 0.55 },
     spoon: { pitchMm: 0.5, amplitudeMm: 0.012, irregularity: 0.35 },
+};
+
+const TOOL_SHEAR_CONFIG: Record<string, ToolShearConstants> = {
+    screwdriver: { shearEfficiency: 0.65, edgeDragFactor: 1.15 },
+    knife: { shearEfficiency: 0.9, edgeDragFactor: 0.85 },
+    crowbar: { shearEfficiency: 0.45, edgeDragFactor: 1.05 },
+    hammer_face: { shearEfficiency: 0.2, edgeDragFactor: 1.25 },
+    hammer_claw: { shearEfficiency: 0.75, edgeDragFactor: 1.2 },
+    spoon: { shearEfficiency: 0.3, edgeDragFactor: 0.95 },
 };
 
 export class ForensicPhysicsEngine {
@@ -959,6 +989,16 @@ export class ForensicPhysicsEngine {
         return config;
     }
 
+    private getToolShearConfig(type: string): ToolShearConstants {
+        const config = TOOL_SHEAR_CONFIG[type];
+        if (!config) {
+            throw new Error(`Missing shear config for tool type "${type}"`);
+        }
+        this.validateRange(config.shearEfficiency, 'shearEfficiency', 0, 1);
+        this.validatePositiveFinite(config.edgeDragFactor, 'edgeDragFactor');
+        return config;
+    }
+
     private validateStriationConfig(config: StriationConfigOverride) {
         if (!Number.isFinite(config.pitchMm) || config.pitchMm <= 0) {
             throw new Error('pitchMm must be a positive finite number');
@@ -969,6 +1009,19 @@ export class ForensicPhysicsEngine {
         if (!Number.isFinite(config.irregularity) || config.irregularity < 0 || config.irregularity > 1) {
             throw new Error('irregularity must be between 0 and 1');
         }
+    }
+
+    private validateMaterialConstants(mat: MaterialConstants, materialType: string) {
+        if (!mat || typeof mat !== 'object') {
+            throw new Error(`Missing material constants for "${materialType}"`);
+        }
+        this.validatePositiveFinite(mat.hardnessMPa, `${materialType}.hardnessMPa`);
+        this.validatePositiveFinite(mat.mohsHardness, `${materialType}.mohsHardness`);
+        this.validateRange(mat.flow, `${materialType}.flow`, 0, 1);
+        this.validateRange(mat.brittleness, `${materialType}.brittleness`, 0, 1);
+        this.validateNonNegativeFinite(mat.frictionCoefficient, `${materialType}.frictionCoefficient`);
+        this.validatePositiveFinite(mat.shearStrengthMPa, `${materialType}.shearStrengthMPa`);
+        this.validateRange(mat.smearFactor, `${materialType}.smearFactor`, 0, 1);
     }
 
     private validateToolKernel(kernel: ToolKernel) {
@@ -988,6 +1041,8 @@ export class ForensicPhysicsEngine {
             throw new Error('toolKernel.profile length must match width * height');
         }
         this.validateRange(kernel.sharpness, 'toolKernel.sharpness', 0, 1);
+        this.validateRange(kernel.shearEfficiency, 'toolKernel.shearEfficiency', 0, 1);
+        this.validatePositiveFinite(kernel.edgeDragFactor, 'toolKernel.edgeDragFactor');
         this.validatePositiveFinite(kernel.maxProfileDepth, 'toolKernel.maxProfileDepth');
         if (!Number.isFinite(kernel.angleDeg) || kernel.angleDeg <= 0 || kernel.angleDeg > 90) {
             throw new Error('toolKernel.angleDeg must be greater than 0 and at most 90 degrees');
