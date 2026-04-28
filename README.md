@@ -77,10 +77,10 @@ For brittle materials, the simulator switches from plastic flow to fracture logi
 
   Partially implemented
 
-  - Tests exist for the elastic-plastic module, but no integration tests for the full simulation loop (tests/elasticPlastic.test.ts).
+  - Tests cover the elastic-plastic module, striation generation, and key full simulation invariants.
+  - Render resolution is capped in the UI to avoid creating browser-hostile geometry sizes until tiled/decimated rendering exists.
 
   Not implemented
 
-  - Use of striationMap from src/utils/physics.ts (the new striation component uses its own model).
   - Anisotropic brushed/grain direction or stochastic pits.
   - Multi‑pass, overshoot, stick‑slip, acceleration profile, or tool slip.

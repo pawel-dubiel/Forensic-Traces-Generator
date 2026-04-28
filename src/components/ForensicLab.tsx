@@ -17,9 +17,19 @@ interface LabProps {
 // 60mm plate size. 
 // 15 pts/mm = 900x900 = 810k verts (Medium)
 // 30 pts/mm = 1800x1800 = 3.24M verts (High Fidelity - Forensically Accurate)
-const DEFAULT_RESOLUTION = 30; 
+export const MAX_RENDER_RESOLUTION = 40;
 const WIDTH_MM = 60;
 const HEIGHT_MM = 60;
+
+const getRenderResolution = (value: number) => {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    throw new Error('resolution must be a positive integer');
+  }
+  if (value > MAX_RENDER_RESOLUTION) {
+    throw new Error(`resolution must be ${MAX_RENDER_RESOLUTION} pts/mm or lower for the current renderer`);
+  }
+  return value;
+};
 
 const ForensicScaleBar: React.FC<{ position?: [number, number, number], rotation?: [number, number, number] }> = ({ position, rotation }) => {
     // ABFO-style L-ruler
@@ -78,7 +88,7 @@ const MaterialSurface: React.FC<{
   const meshRef = useRef<THREE.Mesh>(null);
   
   // Initialize Engine
-  const resolution = simState.resolution ?? DEFAULT_RESOLUTION;
+  const resolution = getRenderResolution(simState.resolution);
   const engine = useMemo(
     () => new ForensicPhysicsEngine(WIDTH_MM, HEIGHT_MM, resolution, simState.randomSeed),
     [simState.randomSeed, resolution]
@@ -148,6 +158,7 @@ const MaterialSurface: React.FC<{
         simState.force,
         kernel,
         simState.material,
+        simState.toolHardness,
         simState.speed,
         simState.chatter,
         timeStep
@@ -229,8 +240,8 @@ const MaterialSurface: React.FC<{
         case 'steel': return '#757980';
         case 'wood': return '#8a5e3a';
         case 'gold': return '#ffd700';
-        default: return '#888';
     }
+    throw new Error(`Unsupported material "${simState.material}"`);
   }, [simState.material]);
 
   return (
@@ -369,8 +380,8 @@ const ToolVisualizer: React.FC<{ simState: SimulationState; toolPath: ToolPathPo
             case 'hammer_face': return <HammerFaceModel />;
             case 'hammer_claw': return <HammerClawModel />;
             case 'spoon': return <SpoonModel />;
-            default: return null;
         }
+        throw new Error(`Unsupported tool type "${simState.toolType}"`);
     };
 
     return (

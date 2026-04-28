@@ -12,8 +12,23 @@ interface ControlsProps {
 
 const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, onReset }) => {
   
-  const handleChange = (key: keyof SimulationState, value: any) => {
+  type NumericSimulationKey = {
+    [K in keyof SimulationState]: SimulationState[K] extends number ? K : never
+  }[keyof SimulationState];
+
+  const readSliderNumber = (value: number | number[]) => {
+    if (Array.isArray(value)) {
+      throw new Error('Range slider values are not supported');
+    }
+    return value;
+  };
+
+  const handleChange = <K extends keyof SimulationState>(key: K, value: SimulationState[K]) => {
     setSimState(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleNumberChange = (key: NumericSimulationKey, value: number | number[]) => {
+    setSimState(prev => ({ ...prev, [key]: readSliderNumber(value) }));
   };
 
   const timeStepValid = Number.isFinite(simState.timeStep) && simState.timeStep > 0;
@@ -30,7 +45,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         <Select
           value={simState.toolType}
           label="Tool Profile"
-          onChange={(e) => handleChange('toolType', e.target.value)}
+          onChange={(e) => handleChange('toolType', e.target.value as SimulationState['toolType'])}
         >
           <MenuItem value="screwdriver">Flathead Screwdriver</MenuItem>
           <MenuItem value="knife">Knife Edge</MenuItem>
@@ -45,7 +60,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
       <Typography gutterBottom variant="body2">Tool Hardness (Mohs)</Typography>
       <Slider
         value={simState.toolHardness}
-        onChange={(_, val) => handleChange('toolHardness', val)}
+        onChange={(_, val) => handleNumberChange('toolHardness', val)}
         min={1} max={10} step={0.5}
         valueLabelDisplay="auto"
         sx={{ mb: 3 }}
@@ -62,8 +77,8 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           <Typography gutterBottom variant="body2">Angle of Attack (°)</Typography>
           <Slider
             value={simState.angle}
-            onChange={(_, val) => handleChange('angle', val)}
-            min={0} max={90}
+            onChange={(_, val) => handleNumberChange('angle', val)}
+            min={1} max={90}
             valueLabelDisplay="auto"
           />
         </Box>
@@ -72,7 +87,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           <Typography gutterBottom variant="body2">Applied Force (N)</Typography>
           <Slider
             value={simState.force}
-            onChange={(_, val) => handleChange('force', val)}
+            onChange={(_, val) => handleNumberChange('force', val)}
             min={0} max={500}
             valueLabelDisplay="auto"
             color="secondary"
@@ -83,7 +98,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
            <Typography gutterBottom variant="body2">Drag Direction (°)</Typography>
            <Slider
             value={simState.direction}
-            onChange={(_, val) => handleChange('direction', val)}
+            onChange={(_, val) => handleNumberChange('direction', val)}
             min={0} max={360}
             valueLabelDisplay="auto"
           />
@@ -93,7 +108,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
            <Typography gutterBottom variant="body2">Tool Speed (mm/s)</Typography>
            <Slider
             value={simState.speed}
-            onChange={(_, val) => handleChange('speed', val)}
+            onChange={(_, val) => handleNumberChange('speed', val)}
             min={1} max={100}
             valueLabelDisplay="auto"
           />
@@ -125,7 +140,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
            <Typography gutterBottom variant="body2">Chatter/Vibration</Typography>
            <Slider
             value={simState.chatter}
-            onChange={(_, val) => handleChange('chatter', val)}
+            onChange={(_, val) => handleNumberChange('chatter', val)}
             min={0} max={1} step={0.05}
             valueLabelDisplay="auto"
           />
@@ -135,7 +150,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
            <Typography gutterBottom variant="body2">Micro-Wear (Edge Condition)</Typography>
            <Slider
             value={simState.toolWear}
-            onChange={(_, val) => handleChange('toolWear', val)}
+            onChange={(_, val) => handleNumberChange('toolWear', val)}
             min={0} max={1} step={0.05}
             valueLabelDisplay="auto"
           />
@@ -153,7 +168,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         <Select
           value={simState.material}
           label="Surface Material"
-          onChange={(e) => handleChange('material', e.target.value)}
+          onChange={(e) => handleChange('material', e.target.value as SimulationState['material'])}
         >
           <MenuItem value="aluminum">Aluminum (Soft)</MenuItem>
           <MenuItem value="brass">Brass (Medium)</MenuItem>
@@ -175,13 +190,11 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           <Select
             value={simState.resolution}
             label="Resolution (pts/mm)"
-            onChange={(e) => handleChange('resolution', e.target.value)}
+            onChange={(e) => handleChange('resolution', Number(e.target.value))}
           >
             <MenuItem value={15}>15</MenuItem>
             <MenuItem value={30}>30</MenuItem>
             <MenuItem value={40}>40</MenuItem>
-            <MenuItem value={60}>60</MenuItem>
-            <MenuItem value={100}>100</MenuItem>
           </Select>
         </FormControl>
 
@@ -190,7 +203,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           <Select
             value={simState.viewMode}
             label="View Mode"
-            onChange={(e) => handleChange('viewMode', e.target.value)}
+            onChange={(e) => handleChange('viewMode', e.target.value as SimulationState['viewMode'])}
           >
             <MenuItem value="standard">Standard (Material)</MenuItem>
             <MenuItem value="heatmap">Depth Heatmap (False Color)</MenuItem>
@@ -202,7 +215,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
            <Typography gutterBottom variant="body2">Raking Light Angle ({simState.rakingLightAngle}°)</Typography>
            <Slider
             value={simState.rakingLightAngle}
-            onChange={(_, val) => handleChange('rakingLightAngle', val)}
+            onChange={(_, val) => handleNumberChange('rakingLightAngle', val)}
             min={0} max={90}
             valueLabelDisplay="auto"
           />

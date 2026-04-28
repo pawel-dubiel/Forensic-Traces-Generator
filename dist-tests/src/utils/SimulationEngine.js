@@ -6,11 +6,11 @@ import { createSeededRandom } from './random.js';
 // Material constants for the simulation loop
 export const MATERIALS = {
     // Brittleness: 0 = Clay (100% Flow), 1 = Glass (100% Fracture/Chip)
-    aluminum: { hardness: 0.5, flow: 0.8, brittleness: 0.1 },
-    brass: { hardness: 0.7, flow: 0.6, brittleness: 0.2 },
-    steel: { hardness: 0.9, flow: 0.3, brittleness: 0.1 },
-    wood: { hardness: 0.2, flow: 0.1, brittleness: 0.9 }, // High brittleness = Splintering
-    gold: { hardness: 0.3, flow: 0.95, brittleness: 0.0 }, // Very ductile, piles up easily
+    aluminum: { hardness: 0.5, mohsHardness: 2.75, flow: 0.8, brittleness: 0.1 },
+    brass: { hardness: 0.7, mohsHardness: 3.0, flow: 0.6, brittleness: 0.2 },
+    steel: { hardness: 0.9, mohsHardness: 5.5, flow: 0.3, brittleness: 0.1 },
+    wood: { hardness: 0.2, mohsHardness: 2.0, flow: 0.1, brittleness: 0.9 }, // High brittleness = Splintering
+    gold: { hardness: 0.3, mohsHardness: 2.5, flow: 0.95, brittleness: 0.0 }, // Very ductile, piles up easily
 };
 const TOOL_STRIATION_CONFIG = {
     screwdriver: { pitchMm: 0.22, amplitudeMm: 0.015, irregularity: 0.45 },
@@ -27,6 +27,11 @@ export class ForensicPhysicsEngine {
     randomSeed;
     toolPath;
     constructor(widthMM, heightMM, resolution, randomSeed) {
+        this.validatePositiveFinite(widthMM, 'widthMM');
+        this.validatePositiveFinite(heightMM, 'heightMM');
+        if (!Number.isFinite(resolution) || resolution <= 0 || !Number.isInteger(resolution)) {
+            throw new Error('resolution must be a positive integer');
+        }
         if (!Number.isFinite(randomSeed)) {
             throw new Error('randomSeed must be a finite number');
         }
@@ -74,6 +79,18 @@ export class ForensicPhysicsEngine {
         this.random = createSeededRandom(this.randomSeed);
     }
     createToolKernel(type, sizeMM, wear, angleDeg, directionDeg, options) {
+        if (!Number.isFinite(sizeMM) || sizeMM <= 0) {
+            throw new Error('sizeMM must be a positive finite number');
+        }
+        if (!Number.isFinite(wear) || wear < 0 || wear > 1) {
+            throw new Error('wear must be between 0 and 1');
+        }
+        if (!Number.isFinite(angleDeg) || angleDeg <= 0 || angleDeg > 90) {
+            throw new Error('angleDeg must be greater than 0 and at most 90 degrees');
+        }
+        if (!Number.isFinite(directionDeg)) {
+            throw new Error('directionDeg must be a finite number');
+        }
         if (!options || typeof options !== 'object') {
             throw new Error('Tool kernel options are required');
         }
@@ -89,6 +106,9 @@ export class ForensicPhysicsEngine {
         const res = this.surface.resolution;
         const gridW = Math.floor(sizeMM * res);
         const gridH = Math.floor(sizeMM * res);
+        if (gridW <= 0 || gridH <= 0) {
+            throw new Error('tool kernel dimensions must be positive');
+        }
         const kernel = new Float64Array(gridW * gridH).fill(999);
         const centerX = Math.floor(gridW / 2);
         const centerY = Math.floor(gridH / 2);
@@ -239,19 +259,29 @@ export class ForensicPhysicsEngine {
             sharpness,
             contactPatchLUT,
             maxProfileDepth,
-            striationProfile
+            striationProfile,
+            angleDeg
         };
     }
     /**
      * Executes the simulation loop with high-fidelity physics.
      * Generator function yields progress (0-100).
      */
-    *simulateCutGenerator(startX, startY, angleDir, force, toolKernel, materialType, speed, chatterParam, timeStep) {
-        if (!Number.isFinite(timeStep) || timeStep <= 0) {
-            throw new Error('timeStep must be a positive finite number');
-        }
+    *simulateCutGenerator(startX, startY, angleDir, force, toolKernel, materialType, toolHardnessMohs, speed, chatterParam, timeStep) {
+        this.validateFinite(startX, 'startX');
+        this.validateFinite(startY, 'startY');
+        this.validateFinite(angleDir, 'angleDir');
+        this.validateNonNegativeFinite(force, 'force');
+        this.validateToolKernel(toolKernel);
+        this.validateToolHardness(toolHardnessMohs);
+        this.validatePositiveFinite(speed, 'speed');
+        this.validateRange(chatterParam, 'chatterParam', 0, 1);
+        this.validatePositiveFinite(timeStep, 'timeStep');
         this.resetRandom();
         const mat = MATERIALS[materialType];
+        if (!mat) {
+            throw new Error(`Missing material constants for "${materialType}"`);
+        }
         const elasticPlastic = new ElasticPlasticModel(getElasticPlasticMaterial(materialType));
         // Physics Loop Parameters
         const totalDist = 40; // mm length of cut
@@ -261,27 +291,33 @@ export class ForensicPhysicsEngine {
         const rad = angleDir * Math.PI / 180;
         const dirX = Math.cos(rad);
         const dirY = Math.sin(rad);
-        let velocity = speed; // mm/s
+        const velocity = speed; // mm/s
         // CORRECTION 1: Non-Linear Contact Mechanics (Meyer's Law / Hardness)
         // Depth d is related to Force F. 
         // For Sharp (Cone/Wedge): F = k * d^2  ->  d = sqrt(F/k)
         // For Blunt (Flat Punch): F = k * d    ->  d = F/k
         // We assume a hybrid based on tool sharpness.
         // Base penetration (Linear ref)
+        const angleRad = this.degreesToRadians(toolKernel.angleDeg);
+        const normalForce = force * Math.sin(angleRad);
         const hardnessMPa = mat.hardness * 1000; // Arbitrary scale
-        const baseDepth = force / hardnessMPa;
+        const hardnessRatio = this.computeToolMaterialHardnessRatio(toolHardnessMohs, mat.mohsHardness);
+        const effectiveForce = normalForce * hardnessRatio;
+        const baseDepth = effectiveForce / hardnessMPa;
         // Adjust based on tool profile
         // Sharp tools (Knife) follow Square Root law (penetrate easier initially, harder deeper)
         // Blunt tools (Hammer) follow Linear law
         let penetration = 0;
-        if (toolKernel.sharpness > 0.8) {
-            // Knife/Sharp: Power law 0.5
-            // Scaling factor to match visual expectations
-            penetration = Math.sqrt(baseDepth) * 2.0;
-        }
-        else {
-            // Blunt: Linear-ish
-            penetration = baseDepth * 2.0;
+        if (effectiveForce > 0) {
+            if (toolKernel.sharpness > 0.8) {
+                // Knife/Sharp: Power law 0.5
+                // Scaling factor to match visual expectations
+                penetration = Math.sqrt(baseDepth) * 2.0;
+            }
+            else {
+                // Blunt: Linear-ish
+                penetration = baseDepth * 2.0;
+            }
         }
         // Fracture Threshold
         const fractureThreshold = 0.5;
@@ -307,11 +343,13 @@ export class ForensicPhysicsEngine {
             const chatterAmp = chatterParam * 0.15;
             const vibration = Math.sin(chatterPhase) * chatterAmp;
             // Apply vibration to Z
-            const toolZ = -penetration + vibration;
+            const toolZ = penetration > 0 ? -penetration + vibration : 0;
             const penetrationDepth = Math.max(0, -toolZ);
-            const characteristicLength = this.getCharacteristicLength(toolKernel, penetrationDepth);
             // 1. Carve
-            this.applyKernel(cx, cy, toolZ, toolKernel, mat, elasticPlastic, characteristicLength);
+            if (penetrationDepth > 0) {
+                const characteristicLength = this.getCharacteristicLength(toolKernel, penetrationDepth);
+                this.applyKernel(cx, cy, toolZ, toolKernel, mat, elasticPlastic, characteristicLength);
+            }
             // 2. Fracture
             if (mat.brittleness > 0.5 && Math.abs(toolZ) > fractureThreshold) {
                 if (this.random() < mat.brittleness * 0.1) {
@@ -625,5 +663,62 @@ export class ForensicPhysicsEngine {
         if (!Number.isFinite(config.irregularity) || config.irregularity < 0 || config.irregularity > 1) {
             throw new Error('irregularity must be between 0 and 1');
         }
+    }
+    validateToolKernel(kernel) {
+        if (!kernel || typeof kernel !== 'object') {
+            throw new Error('toolKernel is required');
+        }
+        if (!(kernel.profile instanceof Float64Array)) {
+            throw new Error('toolKernel.profile must be a Float64Array');
+        }
+        if (!Number.isInteger(kernel.width) || kernel.width <= 0) {
+            throw new Error('toolKernel.width must be a positive integer');
+        }
+        if (!Number.isInteger(kernel.height) || kernel.height <= 0) {
+            throw new Error('toolKernel.height must be a positive integer');
+        }
+        if (kernel.profile.length !== kernel.width * kernel.height) {
+            throw new Error('toolKernel.profile length must match width * height');
+        }
+        this.validateRange(kernel.sharpness, 'toolKernel.sharpness', 0, 1);
+        this.validatePositiveFinite(kernel.maxProfileDepth, 'toolKernel.maxProfileDepth');
+        if (!Number.isFinite(kernel.angleDeg) || kernel.angleDeg <= 0 || kernel.angleDeg > 90) {
+            throw new Error('toolKernel.angleDeg must be greater than 0 and at most 90 degrees');
+        }
+        if (!kernel.contactPatchLUT || kernel.contactPatchLUT.length === 0) {
+            throw new Error('toolKernel.contactPatchLUT must be a non-empty array');
+        }
+    }
+    computeToolMaterialHardnessRatio(toolHardnessMohs, materialHardnessMohs) {
+        this.validateToolHardness(toolHardnessMohs);
+        this.validatePositiveFinite(materialHardnessMohs, 'materialHardnessMohs');
+        return Math.min(2, Math.max(0, toolHardnessMohs / materialHardnessMohs));
+    }
+    validateToolHardness(value) {
+        this.validateRange(value, 'toolHardnessMohs', 1, 10);
+    }
+    validatePositiveFinite(value, label) {
+        if (!Number.isFinite(value) || value <= 0) {
+            throw new Error(`${label} must be a positive finite number`);
+        }
+    }
+    validateNonNegativeFinite(value, label) {
+        if (!Number.isFinite(value) || value < 0) {
+            throw new Error(`${label} must be a non-negative finite number`);
+        }
+    }
+    validateFinite(value, label) {
+        if (!Number.isFinite(value)) {
+            throw new Error(`${label} must be a finite number`);
+        }
+    }
+    validateRange(value, label, min, max) {
+        if (!Number.isFinite(value) || value < min || value > max) {
+            throw new Error(`${label} must be between ${min} and ${max}`);
+        }
+    }
+    degreesToRadians(degrees) {
+        this.validateFinite(degrees, 'degrees');
+        return degrees * Math.PI / 180;
     }
 }
