@@ -3,7 +3,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Environment, Grid, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SimulationState } from '../App';
-import { ForensicPhysicsEngine } from '../utils/SimulationEngine';
+import { buildSurfaceMeshIndices, ForensicPhysicsEngine } from '../utils/SimulationEngine';
 import type { SurfaceDetailMap, ToolPathPoint } from '../utils/SimulationEngine';
 import { ScrewdriverModel, KnifeModel, CrowbarModel, HammerFaceModel, HammerClawModel, SpoonModel } from './Tools3D';
 import { createSeededRandom, deriveSeed } from '../utils/random';
@@ -87,6 +87,7 @@ const MaterialSurface: React.FC<{
   onDetailMapUpdate?: (detailMap: SurfaceDetailMap | null) => void;
 }> = ({ simState, setSimState, onToolPathUpdate, onDetailMapUpdate }) => {
   const meshRef = useRef<THREE.Mesh>(null);
+  const fullIndexRef = useRef<THREE.BufferAttribute | null>(null);
   
   // Initialize Engine
   const resolution = getRenderResolution(simState.resolution);
@@ -94,12 +95,16 @@ const MaterialSurface: React.FC<{
     () => new ForensicPhysicsEngine(WIDTH_MM, HEIGHT_MM, resolution, simState.randomSeed),
     [simState.randomSeed, resolution]
   );
+  useEffect(() => {
+    fullIndexRef.current = null;
+  }, [resolution]);
   const {
     angle,
     chatter,
     direction,
     force,
     material,
+    materialThicknessMm,
     randomSeed,
     speed,
     timeStep,
@@ -107,6 +112,48 @@ const MaterialSurface: React.FC<{
     toolType,
     toolWear
   } = simState;
+
+  const materialColor = useMemo(() => {
+    switch(material) {
+        case 'aluminum': return '#d6d6d6';
+        case 'brass': return '#e6c35c';
+        case 'steel': return '#757980';
+        case 'wood': return '#8a5e3a';
+        case 'gold': return '#ffd700';
+    }
+    throw new Error(`Unsupported material "${material}"`);
+  }, [material]);
+
+  const rebuildSurfaceIndex = useCallback((geometry: THREE.BufferGeometry, detached: Uint8Array) => {
+    if (!fullIndexRef.current) {
+      const index = geometry.getIndex();
+      if (!index) {
+        throw new Error('surface geometry must have an index buffer');
+      }
+      fullIndexRef.current = index.clone();
+    }
+
+    let hasDetached = false;
+    for (let i = 0; i < detached.length; i++) {
+      if (detached[i]) {
+        hasDetached = true;
+        break;
+      }
+    }
+
+    if (!hasDetached) {
+      const currentIndex = geometry.getIndex();
+      if (!currentIndex || currentIndex.count !== fullIndexRef.current.count) {
+        geometry.setIndex(fullIndexRef.current.clone());
+      }
+      return;
+    }
+
+    geometry.setIndex(new THREE.BufferAttribute(
+      buildSurfaceMeshIndices(engine.surface.width, engine.surface.height, detached),
+      1
+    ));
+  }, [engine.surface.height, engine.surface.width]);
 
   const updateMeshFromEngine = useCallback(() => {
     if (!meshRef.current) return;
@@ -120,13 +167,27 @@ const MaterialSurface: React.FC<{
     const colors = geometry.attributes.color;
 
     const engineData = engine.surface.data;
+    const fractureState = engine.getFractureState();
+    const { damage, detached, edgeLift, debrisHeight } = fractureState;
+    if (
+      damage.length !== engineData.length ||
+      detached.length !== engineData.length ||
+      edgeLift.length !== engineData.length ||
+      debrisHeight.length !== engineData.length
+    ) {
+      throw new Error('fracture state arrays must match surface heightfield length');
+    }
+    rebuildSurfaceIndex(geometry, detached);
+    const baseColor = new THREE.Color(materialColor);
+    const fractureColor = new THREE.Color('#f2d6ba');
+    const debrisColor = new THREE.Color('#6b5a47');
 
     // Fast pass if needed, or fixed scale (-2mm to +2mm)
     // Let's use fixed scale for consistency: Blue = -1mm, Green = 0, Red = +1mm
 
     for (let i = 0; i < positions.count; i++) {
         if (i < engineData.length) {
-            const z = engineData[i];
+            const z = engineData[i] + edgeLift[i] + debrisHeight[i];
             positions.setZ(i, z);
 
             // Heatmap Coloring
@@ -136,7 +197,18 @@ const MaterialSurface: React.FC<{
             const t = Math.max(-1, Math.min(1, z / 2.0)); // -1 to 1
 
             let r=0, g=0, b=0;
-            if (t < 0) {
+            if (detached[i]) {
+                r = 0.02;
+                g = 0.02;
+                b = 0.02;
+            } else if (simState.viewMode === 'standard') {
+                const fractureMix = Math.min(1, damage[i] * 0.75 + edgeLift[i] * 2);
+                const debrisMix = Math.min(1, debrisHeight[i] * 3);
+                const color = baseColor.clone().lerp(fractureColor, fractureMix).lerp(debrisColor, debrisMix);
+                r = color.r;
+                g = color.g;
+                b = color.b;
+            } else if (t < 0) {
                 // Negative: Green (0) to Blue (-1)
                 g = 1 + t; // 1 to 0
                 b = -t;    // 0 to 1
@@ -154,7 +226,7 @@ const MaterialSurface: React.FC<{
     positions.needsUpdate = true;
     colors.needsUpdate = true;
     geometry.computeVertexNormals();
-  }, [engine]);
+  }, [engine, materialColor, rebuildSurfaceIndex, simState.viewMode]);
 
   const runSimulation = useCallback(async () => {
     if (!meshRef.current) return;
@@ -200,6 +272,7 @@ const MaterialSurface: React.FC<{
         force,
         kernel,
         material,
+        materialThicknessMm,
         toolHardness,
         speed,
         chatter,
@@ -235,6 +308,7 @@ const MaterialSurface: React.FC<{
     engine,
     force,
     material,
+    materialThicknessMm,
     onDetailMapUpdate,
     onToolPathUpdate,
     randomSeed,
@@ -270,17 +344,6 @@ const MaterialSurface: React.FC<{
     }
   }, [engine, onDetailMapUpdate, onToolPathUpdate, simState.isResetting, updateMeshFromEngine]);
 
-  const materialColor = useMemo(() => {
-    switch(simState.material) {
-        case 'aluminum': return '#d6d6d6';
-        case 'brass': return '#e6c35c';
-        case 'steel': return '#757980';
-        case 'wood': return '#8a5e3a';
-        case 'gold': return '#ffd700';
-    }
-    throw new Error(`Unsupported material "${simState.material}"`);
-  }, [simState.material]);
-
   return (
     <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} receiveShadow castShadow>
       <planeGeometry
@@ -294,7 +357,8 @@ const MaterialSurface: React.FC<{
       
       {simState.viewMode === 'standard' && (
           <meshStandardMaterial 
-            color={materialColor} 
+            color="white"
+            vertexColors={true}
             roughness={simState.material === 'wood' ? 0.9 : 0.4} 
             metalness={simState.material === 'wood' ? 0.0 : 0.8}
             side={THREE.DoubleSide}
