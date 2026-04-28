@@ -69,7 +69,7 @@ interface StriationConfigOverride {
 export type MaterialType = 'aluminum' | 'brass' | 'steel' | 'wood' | 'gold';
 
 interface MaterialConstants {
-    hardness: number;
+    hardnessMPa: number;
     mohsHardness: number;
     flow: number;
     brittleness: number;
@@ -244,7 +244,7 @@ export class ForensicPhysicsEngine {
         const cosYaw = Math.cos(yawRad);
         const sinYaw = Math.sin(yawRad);
 
-        const tiltSlope = Math.tan((90 - angleDeg) * Math.PI / 180);
+        const tiltSlope = Math.min(Math.tan((90 - angleDeg) * Math.PI / 180), 1);
 
         for (let y = 0; y < gridH; y++) {
             for (let x = 0; x < gridW; x++) {
@@ -661,8 +661,8 @@ export class ForensicPhysicsEngine {
         const cDx = crackDirX / len;
         const cDy = crackDirY / len;
         
-        let length = energy * 5 * brittleness; // Crack length in mm
-        let steps = Math.floor(length * res);
+        const length = energy * 5 * brittleness; // Crack length in mm
+        const steps = Math.floor(length * res);
         
         // Walk the crack
         for(let i=0; i<steps; i++) {
