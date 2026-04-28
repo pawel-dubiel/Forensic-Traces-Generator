@@ -266,6 +266,7 @@ export class ForensicPhysicsEngine {
         let sharpness = 0.5;
         const striationConfig = this.getStriationConfig(type, options.striationConfigOverride);
         const striationProfile = this.createToolStriationProfile(striationConfig, sizeMM, wear, options.striationRandom);
+        const shearConfig = this.getToolShearConfig(type);
 
         // Convert Yaw to Rads
         // We want the tool to align with the drag direction.
@@ -416,7 +417,10 @@ export class ForensicPhysicsEngine {
             contactPatchLUT,
             maxProfileDepth,
             striationProfile,
-            angleDeg
+            angleDeg,
+            type,
+            shearEfficiency: shearConfig.shearEfficiency,
+            edgeDragFactor: shearConfig.edgeDragFactor
         };
     }
 
@@ -449,6 +453,7 @@ export class ForensicPhysicsEngine {
         if (!mat) {
             throw new Error(`Missing material constants for "${materialType}"`);
         }
+        this.validateMaterialConstants(mat, materialType);
         const elasticPlastic = new ElasticPlasticModel(getElasticPlasticMaterial(materialType));
         
         // Physics Loop Parameters
@@ -469,13 +474,26 @@ export class ForensicPhysicsEngine {
         const hardnessFactor = this.computeToolHardnessFactor(toolHardnessMohs, mat.hardnessMPa);
         const effectiveNormalForce = normalForce * hardnessFactor;
         const targetContactAreaMm2 = effectiveNormalForce / mat.hardnessMPa;
-        const penetration = this.getDepthForContactArea(toolKernel, targetContactAreaMm2);
+        const rawPenetration = this.getDepthForContactArea(toolKernel, targetContactAreaMm2);
+        const penetration = rawPenetration * Math.sqrt(Math.sin(angleRad));
+        const contactAreaMm2 = this.getContactAreaForDepth(toolKernel, penetration);
+        const shearResponse = this.computeShearResponse(
+            force,
+            normalForce,
+            contactAreaMm2,
+            mat,
+            toolKernel,
+            speed,
+            dirX,
+            dirY
+        );
 
         // Fracture Threshold
         const fractureThreshold = 0.5;
 
         let stepsTaken = 0;
         let elapsedTime = 0;
+        const maxSpatialStepMm = Math.min(0.05, 1 / (this.surface.resolution * 2));
         const pathSampleStep = 0.25;
         let lastSampleDist = -pathSampleStep;
         this.toolPath = [];
@@ -490,52 +508,61 @@ export class ForensicPhysicsEngine {
         let chatterPhase = 0;
 
         while (currentDist < totalDist) {
-            
-            // Chatter / Stick-Slip Update
-            // Phase increment = 2*PI * freq * dt
-            // dt is timeStep
-            const phaseStep = 2 * Math.PI * naturalFreq * timeStep;
-            chatterPhase += phaseStep;
-            
-            // Amplitude scales with chatter param
-            const chatterAmp = chatterParam * 0.15; 
-            const vibration = Math.sin(chatterPhase) * chatterAmp; 
-            
-            // Apply vibration to Z
-            const toolZ = penetration > 0 ? -penetration + vibration : 0;
-            const penetrationDepth = Math.max(0, -toolZ);
+            const tickDistance = Math.min(velocity * timeStep, totalDist - currentDist);
+            const substepCount = Math.max(1, Math.ceil(tickDistance / maxSpatialStepMm));
+            const stepDistance = tickDistance / substepCount;
+            const stepDuration = (tickDistance / velocity) / substepCount;
 
-            // 1. Carve
-            if (penetrationDepth > 0) {
-                const characteristicLength = this.getCharacteristicLength(toolKernel, penetrationDepth);
-                this.applyKernel(cx, cy, toolZ, toolKernel, mat, elasticPlastic, characteristicLength);
-            }
+            for (let substep = 0; substep < substepCount; substep++) {
+                // Chatter / Stick-Slip Update
+                // Phase increment = 2*PI * freq * dt
+                // dt is the user-configured time step, subdivided only when needed to
+                // keep deformation samples spatially stable along the cut.
+                const phaseStep = 2 * Math.PI * naturalFreq * stepDuration;
+                chatterPhase += phaseStep;
 
-            // 2. Fracture
-            if (mat.brittleness > 0.5 && Math.abs(toolZ) > fractureThreshold) {
-                if (this.random() < mat.brittleness * 0.1) {
-                    this.generateCrack(cx, cy, dirX, dirY, Math.abs(toolZ) * 2, mat.brittleness);
+                // Amplitude scales with chatter param
+                const chatterAmp = chatterParam * 0.15;
+                const vibration = Math.sin(chatterPhase) * chatterAmp;
+
+                // Apply vibration to Z
+                const toolZ = penetration > 0 ? -penetration + vibration : 0;
+                const penetrationDepth = Math.max(0, -toolZ);
+
+                // 1. Carve
+                if (penetrationDepth > 0) {
+                    const characteristicLength = this.getCharacteristicLength(toolKernel, penetrationDepth);
+                    const substepScale = Math.min(1, stepDistance / maxSpatialStepMm);
+                    this.applyKernel(cx, cy, toolZ, toolKernel, mat, elasticPlastic, characteristicLength, shearResponse, substepScale);
                 }
-            }
 
-            if (currentDist - lastSampleDist >= pathSampleStep) {
-                this.toolPath.push({ x: cx, y: cy, toolZ, time: elapsedTime });
-                lastSampleDist = currentDist;
-            }
+                // 2. Fracture
+                if (mat.brittleness > 0.5 && Math.abs(toolZ) > fractureThreshold) {
+                    if (this.random() < mat.brittleness * 0.1) {
+                        this.generateCrack(cx, cy, dirX, dirY, Math.abs(toolZ) * 2, mat.brittleness);
+                    }
+                }
 
-            // 3. Move
-            const tremor = (this.random() - 0.5) * 0.05;
-            cx += (dirX * velocity * timeStep) + (-dirY * tremor);
-            cy += (dirY * velocity * timeStep) + (dirX * tremor);
-            
-            currentDist += velocity * timeStep;
-            stepsTaken++;
-            elapsedTime += timeStep;
+                if (currentDist - lastSampleDist >= pathSampleStep) {
+                    this.toolPath.push({ x: cx, y: cy, toolZ, time: elapsedTime });
+                    lastSampleDist = currentDist;
+                }
 
-            // Yield every 500 steps (approx 10-20ms of work) to keep UI responsive
-            if (stepsTaken % 500 === 0) {
-                 const prog = (currentDist / totalDist) * 90; // Go up to 90%
-                 yield prog;
+                // 3. Move
+                const tremorScale = Math.min(1, stepDistance / maxSpatialStepMm);
+                const tremor = (this.random() - 0.5) * 0.05 * tremorScale;
+                cx += (dirX * stepDistance) + (-dirY * tremor);
+                cy += (dirY * stepDistance) + (dirX * tremor);
+
+                currentDist += stepDistance;
+                stepsTaken++;
+                elapsedTime += stepDuration;
+
+                // Yield every 500 steps (approx 10-20ms of work) to keep UI responsive
+                if (stepsTaken % 500 === 0) {
+                    const prog = (currentDist / totalDist) * 90; // Go up to 90%
+                    yield prog;
+                }
             }
         }
 
@@ -547,7 +574,8 @@ export class ForensicPhysicsEngine {
                 totalDist,
                 toolKernel,
                 penetration,
-                chatterParam
+                chatterParam,
+                shearResponse
             );
         }
 
@@ -561,8 +589,11 @@ export class ForensicPhysicsEngine {
         kernel: ToolKernel,
         mat: MaterialConstants,
         elasticPlastic: ElasticPlasticModel,
-        characteristicLength: number
+        characteristicLength: number,
+        shearResponse: ShearResponse,
+        substepScale: number
     ) {
+        this.validateRange(substepScale, 'substepScale', 0, 1);
         const res = this.surface.resolution;
         const cellAreaMm2 = 1 / (res * res);
         const gx = Math.floor(cx * res);
@@ -595,10 +626,17 @@ export class ForensicPhysicsEngine {
                         );
 
                         if (result.permanentDepth > 0) {
-                            const newHeight = currentHeight - result.permanentDepth;
+                            const shearRoughness = this.getShearRoughness(
+                                mapX,
+                                mapY,
+                                shearResponse.tearRoughness * substepScale,
+                                result.permanentDepth
+                            );
+                            const newHeight = currentHeight - result.permanentDepth + shearRoughness;
                             displacedVolume += result.permanentDepth * cellAreaMm2;
                             this.surface.data[idx] = newHeight;
                             if (Math.abs(newHeight) > maxDepth) maxDepth = Math.abs(newHeight);
+                            this.applyShearSmear(mapX, mapY, result.permanentDepth, shearResponse, substepScale);
                         }
 
                         if (result.plasticStrainIncrement > 0) {
@@ -647,18 +685,31 @@ export class ForensicPhysicsEngine {
                     // Height to add = VolumeRing / PixelsRing
                     // Combined: Height = (TotalVolume * Weight) / TotalWeightedArea
                     
-                    const heightToAdd = (flowVolume * weight) / totalWeightedAreaMm2;
+                    const heightToAdd = (flowVolume * (1 - shearResponse.asymmetricPileupBias) * weight) / totalWeightedAreaMm2;
                     
                     this.addPileUpRing(startX - r, startY - r, kernel.width + r*2, kernel.height + r*2, heightToAdd);
+                }
+
+                const biasedVolume = flowVolume * shearResponse.asymmetricPileupBias;
+                if (biasedVolume > 0) {
+                    this.addBiasedPileUp(
+                        startX,
+                        startY,
+                        kernel.width,
+                        kernel.height,
+                        biasedVolume,
+                        cellAreaMm2,
+                        shearResponse
+                    );
                 }
             }
 
             // Visualizing "Chips" / Debris? 
             // In a heightfield, we can't show flying particles.
             // But we can leave "roughness" in the cut to simulate torn material.
-            if (chipRatio > 0.5) {
+            if (chipRatio > 0.5 || shearResponse.tearRoughness > 0.01) {
                 // Roughen the bottom of the cut we just made
-                this.roughenCut(startX, startY, kernel.width, kernel.height, chipRatio * 0.05);
+                this.roughenCut(startX, startY, kernel.width, kernel.height, (chipRatio * 0.05 + shearResponse.tearRoughness) * substepScale);
             }
         }
     }
@@ -725,7 +776,7 @@ export class ForensicPhysicsEngine {
                      const idx = mapY * this.surface.width + mapX;
                      // Only roughen if it's actually cut (negative Z)
                      if (this.surface.data[idx] < -0.01) {
-                         this.surface.data[idx] -= this.random() * amount;
+                         this.surface.data[idx] += (this.random() - 0.5) * amount;
                      }
                  }
              }
@@ -752,6 +803,75 @@ export class ForensicPhysicsEngine {
         }
     }
 
+    private applyShearSmear(mapX: number, mapY: number, permanentDepth: number, shearResponse: ShearResponse, substepScale: number) {
+        if (shearResponse.smearDepth <= 0 || permanentDepth <= 0) {
+            return;
+        }
+        this.validateRange(substepScale, 'substepScale', 0, 1);
+
+        const offsetCells = Math.max(1, Math.round(shearResponse.lateralDisplacement * this.surface.resolution));
+        const targetX = mapX + Math.round(shearResponse.trailingX * offsetCells);
+        const targetY = mapY + Math.round(shearResponse.trailingY * offsetCells);
+        const smearHeight = Math.min(permanentDepth * 0.35, shearResponse.smearDepth * substepScale);
+
+        this.safeAdd(targetX, targetY, smearHeight);
+    }
+
+    private addBiasedPileUp(
+        startX: number,
+        startY: number,
+        width: number,
+        height: number,
+        volumeMm3: number,
+        cellAreaMm2: number,
+        shearResponse: ShearResponse
+    ) {
+        if (volumeMm3 <= 0) {
+            return;
+        }
+
+        const offsetCells = Math.max(1, Math.round((1 + shearResponse.lateralDisplacement) * this.surface.resolution));
+        const centerX = startX + Math.floor(width / 2) + Math.round(shearResponse.trailingX * offsetCells);
+        const centerY = startY + Math.floor(height / 2) + Math.round(shearResponse.trailingY * offsetCells);
+        const radius = Math.max(1, Math.ceil(Math.max(width, height) * 0.22));
+
+        let totalWeightedAreaMm2 = 0;
+        for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+                const distance = Math.hypot(x - centerX, y - centerY);
+                if (distance <= radius) {
+                    totalWeightedAreaMm2 += (1 - distance / (radius + 1)) * cellAreaMm2;
+                }
+            }
+        }
+
+        if (totalWeightedAreaMm2 <= 0) {
+            return;
+        }
+
+        for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+                const distance = Math.hypot(x - centerX, y - centerY);
+                if (distance <= radius) {
+                    const weight = 1 - distance / (radius + 1);
+                    this.safeAdd(x, y, (volumeMm3 * weight) / totalWeightedAreaMm2);
+                }
+            }
+        }
+    }
+
+    private getShearRoughness(mapX: number, mapY: number, amount: number, permanentDepth: number): number {
+        if (amount <= 0) {
+            return 0;
+        }
+        this.validatePositiveFinite(permanentDepth, 'permanentDepth');
+        const xMm = mapX / this.surface.resolution;
+        const yMm = mapY / this.surface.resolution;
+        const signedNoise = (this.coordinateNoise(xMm + 0.173, yMm + 0.719) - 0.5) * amount;
+        const depthBound = permanentDepth * 0.2;
+        return Math.max(-depthBound, Math.min(depthBound, signedNoise));
+    }
+
     private createSurfaceDetailMap(
         originX: number,
         originY: number,
@@ -759,7 +879,8 @@ export class ForensicPhysicsEngine {
         lengthMm: number,
         kernel: ToolKernel,
         penetration: number,
-        chatterParam: number
+        chatterParam: number,
+        shearResponse: ShearResponse
     ): SurfaceDetailMap {
         this.validateFinite(originX, 'originX');
         this.validateFinite(originY, 'originY');
@@ -788,8 +909,10 @@ export class ForensicPhysicsEngine {
                 const alongMm = x / DETAIL_MAP_RESOLUTION;
                 const chatter = Math.sin(alongMm * (2 * Math.PI / 1.2)) * chatterParam * 0.003;
                 const waviness = Math.sin(alongMm * (2 * Math.PI / 0.34) + acrossMm * 1.7) * 0.0015 * kernel.sharpness;
+                const shearTear = (this.coordinateNoise(alongMm + 0.311, acrossMm + 0.577) - 0.5) * shearResponse.tearRoughness * 0.18;
+                const shearSmear = shearResponse.smearDepth * 0.12 * Math.max(0, 1 - Math.abs(acrossMm) / (widthMm / 2));
                 const fade = Math.sin(Math.PI * x / (lengthSamples - 1));
-                const height = (crossSection + chatter + waviness) * Math.max(0, fade);
+                const height = (crossSection + chatter + waviness + shearTear + shearSmear) * Math.max(0, fade);
                 const idx = y * lengthSamples + x;
                 data[idx] = height;
                 if (height < minHeight) minHeight = height;
@@ -857,6 +980,64 @@ export class ForensicPhysicsEngine {
         return fallback;
     }
 
+    private computeShearResponse(
+        force: number,
+        normalForce: number,
+        contactAreaMm2: number,
+        mat: MaterialConstants,
+        kernel: ToolKernel,
+        speed: number,
+        dirX: number,
+        dirY: number
+    ): ShearResponse {
+        this.validateNonNegativeFinite(force, 'force');
+        this.validateNonNegativeFinite(normalForce, 'normalForce');
+        this.validateNonNegativeFinite(contactAreaMm2, 'contactAreaMm2');
+        this.validatePositiveFinite(speed, 'speed');
+        this.validateToolKernel(kernel);
+
+        if (force === 0 || contactAreaMm2 === 0) {
+            return {
+                stressRatio: 0,
+                lateralDisplacement: 0,
+                smearDepth: 0,
+                asymmetricPileupBias: 0,
+                tearRoughness: 0,
+                trailingX: -dirX,
+                trailingY: -dirY
+            };
+        }
+
+        const tangentialShare = Math.cos(this.degreesToRadians(kernel.angleDeg));
+        const tangentialForce = force * tangentialShare;
+        const frictionForce = normalForce * mat.frictionCoefficient * kernel.edgeDragFactor;
+        const shearStress = ((tangentialForce + frictionForce) * kernel.shearEfficiency) / contactAreaMm2;
+        const stressRatio = Math.max(0, shearStress / mat.shearStrengthMPa);
+        const boundedStress = Math.min(6, stressRatio);
+        const highSpeedInstability = Math.min(0.35, Math.max(0, (speed - 20) / 160));
+        const lowSpeedStickSlip = Math.min(0.35, Math.max(0, (20 - speed) / 60) * mat.frictionCoefficient);
+        const instability = highSpeedInstability + lowSpeedStickSlip;
+        const exceedance = Math.max(0, boundedStress - 1);
+        const lateralDisplacement = Math.min(0.45, (0.035 * boundedStress + instability * 0.04) * kernel.shearEfficiency);
+        const smearDepth = Math.min(0.08, (0.012 * boundedStress + instability * 0.01) * mat.smearFactor * (1 - mat.brittleness * 0.55));
+        const asymmetricPileupBias = Math.min(0.65, (0.18 * boundedStress + instability * 0.18 + 0.22 * tangentialShare) * (0.4 + mat.flow));
+        const tearRoughness = Math.min(0.12, exceedance * (0.015 + mat.brittleness * 0.06) + instability * 0.02);
+        const dirLen = Math.hypot(dirX, dirY);
+        if (dirLen <= 0) {
+            throw new Error('drag direction vector must be non-zero');
+        }
+
+        return {
+            stressRatio,
+            lateralDisplacement,
+            smearDepth,
+            asymmetricPileupBias,
+            tearRoughness,
+            trailingX: -dirX / dirLen,
+            trailingY: -dirY / dirLen
+        };
+    }
+
     private getDepthForContactArea(kernel: ToolKernel, targetAreaMm2: number): number {
         this.validateNonNegativeFinite(targetAreaMm2, 'targetAreaMm2');
         if (targetAreaMm2 === 0) {
@@ -885,6 +1066,36 @@ export class ForensicPhysicsEngine {
         }
 
         return kernel.maxProfileDepth;
+    }
+
+    private getContactAreaForDepth(kernel: ToolKernel, penetrationDepth: number): number {
+        this.validateNonNegativeFinite(penetrationDepth, 'penetrationDepth');
+        if (penetrationDepth === 0) {
+            return 0;
+        }
+        if (!kernel.contactPatchLUT || kernel.contactPatchLUT.length === 0) {
+            throw new Error('contactPatchLUT must be a non-empty array');
+        }
+
+        const lut = kernel.contactPatchLUT;
+        if (penetrationDepth <= lut[0].depth) {
+            return lut[0].areaMm2 * (penetrationDepth / lut[0].depth);
+        }
+
+        for (let i = 1; i < lut.length; i++) {
+            const prev = lut[i - 1];
+            const next = lut[i];
+            if (penetrationDepth <= next.depth) {
+                const span = next.depth - prev.depth;
+                if (span <= 0) {
+                    continue;
+                }
+                const t = (penetrationDepth - prev.depth) / span;
+                return prev.areaMm2 + (next.areaMm2 - prev.areaMm2) * t;
+            }
+        }
+
+        return lut[lut.length - 1].areaMm2;
     }
 
     private buildContactPatchLUT(kernel: Float64Array, width: number, height: number) {
