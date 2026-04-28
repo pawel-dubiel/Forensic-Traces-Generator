@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ForensicPhysicsEngine, MATERIALS } from '../src/utils/SimulationEngine.js';
+import { buildSurfaceMeshIndices, ForensicPhysicsEngine, MATERIALS } from '../src/utils/SimulationEngine.js';
 import { createSeededRandom, deriveSeed } from '../src/utils/random.js';
 import type { MaterialType, ToolKernel } from '../src/utils/SimulationEngine.js';
 
@@ -27,7 +27,8 @@ const runSimulation = (
   chatter = 0,
   speed = 20,
   angleDir = 0,
-  timeStep = 0.002
+  timeStep = 0.002,
+  materialThicknessMm = MATERIALS[material].defaultThicknessMm
 ) => {
   Array.from(engine.simulateCutGenerator(
     10,
@@ -36,6 +37,7 @@ const runSimulation = (
     force,
     kernel,
     material,
+    materialThicknessMm,
     toolHardness,
     speed,
     chatter,
@@ -86,12 +88,13 @@ const simulateSurface = (
   angleDeg = 45,
   speed = 20,
   toolType = 'screwdriver',
-  sizeMm = 6
+  sizeMm = 6,
+  materialThicknessMm = MATERIALS[material].defaultThicknessMm
 ) => {
   const engine = new ForensicPhysicsEngine(60, 60, 10, seed);
   const before = new Float64Array(engine.surface.data);
   const kernel = createKernel(engine, angleDeg, toolType, sizeMm);
-  runSimulation(engine, kernel, force, toolHardness, material, 0, speed);
+  runSimulation(engine, kernel, force, toolHardness, material, 0, speed, 0, 0.002, materialThicknessMm);
   return { before, after: engine.surface.data, engine };
 };
 
@@ -159,6 +162,24 @@ const meanCutDepthInCutBand = (before: Float64Array, after: Float64Array, engine
   }
 
   return totalDepth / loweredCells;
+};
+
+const fractureStats = (engine: ForensicPhysicsEngine) => {
+  const { damage, detached, edgeLift, debrisHeight } = engine.getFractureState();
+  let detachedCount = 0;
+  let maxDamage = 0;
+  let liftedCells = 0;
+  let debrisVolume = 0;
+  const cellAreaMm2 = 1 / (engine.surface.resolution * engine.surface.resolution);
+
+  for (let i = 0; i < detached.length; i++) {
+    if (detached[i]) detachedCount++;
+    if (damage[i] > maxDamage) maxDamage = damage[i];
+    if (edgeLift[i] > 0) liftedCells++;
+    if (debrisHeight[i] > 0) debrisVolume += debrisHeight[i] * cellAreaMm2;
+  }
+
+  return { detachedCount, maxDamage, liftedCells, debrisVolume };
 };
 
 const heightAt = (engine: ForensicPhysicsEngine, xMm: number, yMm: number) => {
@@ -300,11 +321,14 @@ test('higher tangential component increases shear texture without increasing nor
   assert.ok(highTangentialStats.minDelta > lowTangentialStats.minDelta);
 });
 
-test('brittle material roughens more under high shear than ductile material', () => {
+test('brittle material fractures more under high shear than ductile material', () => {
   const ductile = simulateSurface(120, 8, 'gold', 25);
   const brittle = simulateSurface(120, 8, 'wood', 25);
+  const ductileFracture = fractureStats(ductile.engine);
+  const brittleFracture = fractureStats(brittle.engine);
 
-  assert.ok(roughnessInCutBand(brittle.before, brittle.after, brittle.engine) > roughnessInCutBand(ductile.before, ductile.after, ductile.engine));
+  assert.ok(brittleFracture.maxDamage > ductileFracture.maxDamage);
+  assert.ok(brittleFracture.detachedCount > ductileFracture.detachedCount);
 });
 
 test('zero force does not create a detail map', () => {
@@ -316,20 +340,107 @@ test('zero force does not create a detail map', () => {
   assert.equal(engine.getSurfaceDetailMap(), null);
 });
 
+test('low force on thick material accumulates no detachment', () => {
+  const thickWood = simulateSurface(20, 8, 'wood', 45, 20, 'screwdriver', 6, 5);
+  const stats = fractureStats(thickWood.engine);
+
+  assert.equal(stats.detachedCount, 0);
+});
+
+test('high force on thin brittle material creates holes lifted edges and debris', () => {
+  const thinWood = simulateSurface(500, 8, 'wood', 45, 20, 'screwdriver', 6, 0.2);
+  const stats = fractureStats(thinWood.engine);
+
+  assert.ok(stats.detachedCount > 0);
+  assert.ok(stats.liftedCells > 0);
+  assert.ok(stats.debrisVolume > 0);
+});
+
+test('greater thickness resists material detachment', () => {
+  const thinWood = simulateSurface(350, 8, 'wood', 45, 20, 'screwdriver', 6, 0.2);
+  const thickWood = simulateSurface(350, 8, 'wood', 45, 20, 'screwdriver', 6, 2.5);
+
+  assert.ok(fractureStats(thinWood.engine).detachedCount > fractureStats(thickWood.engine).detachedCount);
+});
+
+test('ductile metal resists detachment more than brittle wood under the same load', () => {
+  const wood = simulateSurface(300, 8, 'wood', 45, 20, 'screwdriver', 6, 0.4);
+  const aluminum = simulateSurface(300, 8, 'aluminum', 45, 20, 'screwdriver', 6, 0.4);
+
+  assert.ok(fractureStats(wood.engine).detachedCount > fractureStats(aluminum.engine).detachedCount);
+});
+
+test('detached cells are not deformed again by later passes', () => {
+  const engine = new ForensicPhysicsEngine(60, 60, 10, seed);
+  const kernel = createKernel(engine);
+
+  runSimulation(engine, kernel, 500, 8, 'wood', 0, 20, 0, 0.002, 0.2);
+
+  const { detached } = engine.getFractureState();
+  const detachedHeights = new Map<number, number>();
+  for (let i = 0; i < detached.length; i++) {
+    if (detached[i]) {
+      detachedHeights.set(i, engine.surface.data[i]);
+    }
+  }
+  assert.ok(detachedHeights.size > 0);
+
+  runSimulation(engine, kernel, 500, 8, 'wood', 0, 20, 0, 0.002, 0.2);
+
+  for (const [idx, height] of detachedHeights) {
+    assert.equal(engine.surface.data[idx], height);
+  }
+});
+
+test('fracture debris volume is deterministic for the same seed', () => {
+  const first = simulateSurface(500, 8, 'wood', 45, 20, 'screwdriver', 6, 0.2);
+  const second = simulateSurface(500, 8, 'wood', 45, 20, 'screwdriver', 6, 0.2);
+
+  assert.equal(fractureStats(first.engine).debrisVolume, fractureStats(second.engine).debrisVolume);
+});
+
+test('surface mesh indices remove triangles adjacent to detached vertices', () => {
+  const detached = new Uint8Array(9);
+  const full = buildSurfaceMeshIndices(3, 3, detached);
+
+  detached[4] = 1;
+  const fractured = buildSurfaceMeshIndices(3, 3, detached);
+
+  assert.equal(full.length, 24);
+  assert.equal(fractured.length, 0);
+});
+
+test('reset restores fracture state without detached cells or debris', () => {
+  const fractured = simulateSurface(500, 8, 'wood', 45, 20, 'screwdriver', 6, 0.2);
+  assert.ok(fractureStats(fractured.engine).detachedCount > 0);
+
+  fractured.engine.reset();
+  const resetStats = fractureStats(fractured.engine);
+
+  assert.equal(resetStats.detachedCount, 0);
+  assert.equal(resetStats.debrisVolume, 0);
+  assert.equal(resetStats.liftedCells, 0);
+  assert.equal(resetStats.maxDamage, 0);
+});
+
 test('fails fast for invalid simulation parameters', () => {
   const engine = new ForensicPhysicsEngine(60, 60, 10, seed);
   const kernel = createKernel(engine);
 
   assert.throws(
-    () => Array.from(engine.simulateCutGenerator(10, 30, 0, -1, kernel, 'aluminum', 8, 20, 0, 0.002)),
+    () => Array.from(engine.simulateCutGenerator(10, 30, 0, -1, kernel, 'aluminum', 1, 8, 20, 0, 0.002)),
     /force/
   );
   assert.throws(
-    () => Array.from(engine.simulateCutGenerator(10, 30, 0, 10, kernel, 'aluminum', 0, 20, 0, 0.002)),
+    () => Array.from(engine.simulateCutGenerator(10, 30, 0, 10, kernel, 'aluminum', 1, 0, 20, 0, 0.002)),
     /toolHardnessMohs/
   );
   assert.throws(
-    () => Array.from(engine.simulateCutGenerator(10, 30, 0, 10, kernel, 'aluminum', 8, 20, 1.5, 0.002)),
+    () => Array.from(engine.simulateCutGenerator(10, 30, 0, 10, kernel, 'aluminum', 1, 8, 20, 1.5, 0.002)),
     /chatterParam/
+  );
+  assert.throws(
+    () => Array.from(engine.simulateCutGenerator(10, 30, 0, 10, kernel, 'aluminum', 0, 8, 20, 0, 0.002)),
+    /materialThicknessMm/
   );
 });
