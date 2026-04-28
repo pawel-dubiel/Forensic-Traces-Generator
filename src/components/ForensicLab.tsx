@@ -1,10 +1,10 @@
-import React, { useMemo, useRef, useEffect, useState } from 'react';
+import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Environment, Grid, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SimulationState } from '../App';
 import { ForensicPhysicsEngine } from '../utils/SimulationEngine';
-import type { ToolPathPoint } from '../utils/SimulationEngine';
+import type { SurfaceDetailMap, ToolPathPoint } from '../utils/SimulationEngine';
 import { ScrewdriverModel, KnifeModel, CrowbarModel, HammerFaceModel, HammerClawModel, SpoonModel } from './Tools3D';
 import { createSeededRandom, deriveSeed } from '../utils/random';
 
@@ -84,7 +84,8 @@ const MaterialSurface: React.FC<{
   simState: SimulationState;
   setSimState?: React.Dispatch<React.SetStateAction<SimulationState>>;
   onToolPathUpdate?: (path: ToolPathPoint[]) => void;
-}> = ({ simState, setSimState, onToolPathUpdate }) => {
+  onDetailMapUpdate?: (detailMap: SurfaceDetailMap | null) => void;
+}> = ({ simState, setSimState, onToolPathUpdate, onDetailMapUpdate }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   
   // Initialize Engine
@@ -93,103 +94,25 @@ const MaterialSurface: React.FC<{
     () => new ForensicPhysicsEngine(WIDTH_MM, HEIGHT_MM, resolution, simState.randomSeed),
     [simState.randomSeed, resolution]
   );
+  const {
+    angle,
+    chatter,
+    direction,
+    force,
+    material,
+    randomSeed,
+    speed,
+    timeStep,
+    toolHardness,
+    toolType,
+    toolWear
+  } = simState;
 
-  useEffect(() => {
-    // Reset geometry to base topography on mount or reset
-    updateMeshFromEngine();
-  }, []); // Run once
-
-  useEffect(() => {
-    if (simState.isSimulating) {
-        // Run Simulation (Blocking main thread is fine as per user request "don't care about speed")
-        runSimulation();
-    }
-  }, [simState.isSimulating]);
-
-  useEffect(() => {
-    if (simState.isResetting) {
-        engine.reset();
-        updateMeshFromEngine();
-        if (onToolPathUpdate) {
-          onToolPathUpdate([]);
-        }
-    }
-  }, [simState.isResetting]);
-
-  const runSimulation = async () => {
-    if (!meshRef.current) return;
-    if (onToolPathUpdate) {
-      onToolPathUpdate([]);
-    }
-
-    // 1. Create Tool Kernel
-    let toolSize = 6;
-    if (simState.toolType === 'crowbar') toolSize = 10;
-    if (simState.toolType === 'knife') toolSize = 1;
-    if (simState.toolType === 'hammer_face') toolSize = 25;
-    if (simState.toolType === 'hammer_claw') toolSize = 30;
-    if (simState.toolType === 'spoon') toolSize = 30;
-
-    const baseRandom = createSeededRandom(simState.randomSeed);
-    const striationRandom = createSeededRandom(deriveSeed(simState.randomSeed, 1));
-
-    const kernel = engine.createToolKernel(
-        simState.toolType,
-        toolSize,
-        simState.toolWear,
-        simState.angle,
-        simState.direction,
-        {
-          baseRandom,
-          striationRandom,
-          striationsEnabled: true
-        }
-    );
-
-    const timeStep = simState.timeStep;
-    if (!Number.isFinite(timeStep) || timeStep <= 0) {
-      throw new Error('timeStep must be a positive finite number');
-    }
-
-    // 2. Execute Physics Loop (Generator Pattern)
-    const generator = engine.simulateCutGenerator(
-        10, 30, // Start X, Y
-        simState.direction, 
-        simState.force,
-        kernel,
-        simState.material,
-        simState.toolHardness,
-        simState.speed,
-        simState.chatter,
-        timeStep
-    );
-
-    // Iterate through generator to allow UI updates
-    for (const progress of generator) {
-        if (setSimState) {
-            setSimState(prev => ({ ...prev, progress }));
-        }
-        // Yield to event loop to let React render progress bar
-        await new Promise(resolve => setTimeout(resolve, 0));
-    }
-
-    // 3. Update Mesh at the end
-    updateMeshFromEngine();
-    if (onToolPathUpdate) {
-      onToolPathUpdate(engine.getToolPath());
-    }
-    
-    // Reset simulation flag
-    if (setSimState) {
-        setSimState(prev => ({ ...prev, isSimulating: false, progress: 100 }));
-    }
-  };
-
-  const updateMeshFromEngine = () => {
+  const updateMeshFromEngine = useCallback(() => {
     if (!meshRef.current) return;
     const geometry = meshRef.current.geometry;
     const positions = geometry.attributes.position;
-    
+
     // Check/Init colors attribute if needed for Heatmap
     if (!geometry.attributes.color) {
         geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(positions.count * 3), 3));
@@ -197,21 +120,21 @@ const MaterialSurface: React.FC<{
     const colors = geometry.attributes.color;
 
     const engineData = engine.surface.data;
-    
+
     // Fast pass if needed, or fixed scale (-2mm to +2mm)
     // Let's use fixed scale for consistency: Blue = -1mm, Green = 0, Red = +1mm
-    
+
     for (let i = 0; i < positions.count; i++) {
         if (i < engineData.length) {
             const z = engineData[i];
             positions.setZ(i, z);
-            
+
             // Heatmap Coloring
             // Map Z to RGB
-            // Deep (negative) = Blue, High (positive/pileup) = Red, Zero = Green/Grey
+            // Deep (negative) = Blue, High (positive/pileup) = Red
             // Scale: +/- 2.0mm range (Auto-scaling or wider fixed)
             const t = Math.max(-1, Math.min(1, z / 2.0)); // -1 to 1
-            
+
             let r=0, g=0, b=0;
             if (t < 0) {
                 // Negative: Green (0) to Blue (-1)
@@ -231,7 +154,121 @@ const MaterialSurface: React.FC<{
     positions.needsUpdate = true;
     colors.needsUpdate = true;
     geometry.computeVertexNormals();
-  };
+  }, [engine]);
+
+  const runSimulation = useCallback(async () => {
+    if (!meshRef.current) return;
+    if (onToolPathUpdate) {
+      onToolPathUpdate([]);
+    }
+    if (onDetailMapUpdate) {
+      onDetailMapUpdate(null);
+    }
+
+    // 1. Create Tool Kernel
+    let toolSize = 6;
+    if (toolType === 'crowbar') toolSize = 10;
+    if (toolType === 'knife') toolSize = 1;
+    if (toolType === 'hammer_face') toolSize = 25;
+    if (toolType === 'hammer_claw') toolSize = 30;
+    if (toolType === 'spoon') toolSize = 30;
+
+    const baseRandom = createSeededRandom(randomSeed);
+    const striationRandom = createSeededRandom(deriveSeed(randomSeed, 1));
+
+    const kernel = engine.createToolKernel(
+        toolType,
+        toolSize,
+        toolWear,
+        angle,
+        direction,
+        {
+          baseRandom,
+          striationRandom,
+          striationsEnabled: true
+        }
+    );
+
+    if (!Number.isFinite(timeStep) || timeStep <= 0) {
+      throw new Error('timeStep must be a positive finite number');
+    }
+
+    // 2. Execute Physics Loop (Generator Pattern)
+    const generator = engine.simulateCutGenerator(
+        10, 30, // Start X, Y
+        direction,
+        force,
+        kernel,
+        material,
+        toolHardness,
+        speed,
+        chatter,
+        timeStep
+    );
+
+    // Iterate through generator to allow UI updates
+    for (const progress of generator) {
+        if (setSimState) {
+            setSimState(prev => ({ ...prev, progress }));
+        }
+        // Yield to event loop to let React render progress bar
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    // 3. Update Mesh at the end
+    updateMeshFromEngine();
+    if (onToolPathUpdate) {
+      onToolPathUpdate(engine.getToolPath());
+    }
+    if (onDetailMapUpdate) {
+      onDetailMapUpdate(engine.getSurfaceDetailMap());
+    }
+    
+    // Reset simulation flag
+    if (setSimState) {
+        setSimState(prev => ({ ...prev, isSimulating: false, progress: 100 }));
+    }
+  }, [
+    angle,
+    chatter,
+    direction,
+    engine,
+    force,
+    material,
+    onDetailMapUpdate,
+    onToolPathUpdate,
+    randomSeed,
+    setSimState,
+    speed,
+    timeStep,
+    toolHardness,
+    toolType,
+    toolWear,
+    updateMeshFromEngine
+  ]);
+
+  useEffect(() => {
+    updateMeshFromEngine();
+  }, [updateMeshFromEngine]);
+
+  useEffect(() => {
+    if (simState.isSimulating) {
+        runSimulation();
+    }
+  }, [runSimulation, simState.isSimulating]);
+
+  useEffect(() => {
+    if (simState.isResetting) {
+        engine.reset();
+        updateMeshFromEngine();
+        if (onToolPathUpdate) {
+          onToolPathUpdate([]);
+        }
+        if (onDetailMapUpdate) {
+          onDetailMapUpdate(null);
+        }
+    }
+  }, [engine, onDetailMapUpdate, onToolPathUpdate, simState.isResetting, updateMeshFromEngine]);
 
   const materialColor = useMemo(() => {
     switch(simState.material) {
@@ -276,6 +313,69 @@ const MaterialSurface: React.FC<{
           <meshNormalMaterial side={THREE.DoubleSide} />
       )}
     </mesh>
+  );
+};
+
+const DetailMapOverlay: React.FC<{ detailMap: SurfaceDetailMap | null }> = ({ detailMap }) => {
+  const texture = useMemo(() => {
+    if (!detailMap) return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = detailMap.lengthSamples;
+    canvas.height = detailMap.widthSamples;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('2D canvas context is required for detail map texture');
+    }
+
+    const image = context.createImageData(canvas.width, canvas.height);
+    const range = Math.max(Math.abs(detailMap.minHeight), Math.abs(detailMap.maxHeight), 0.001);
+
+    for (let i = 0; i < detailMap.data.length; i++) {
+      const normalized = Math.max(-1, Math.min(1, detailMap.data[i] / range));
+      const shade = Math.round(128 + normalized * 105);
+      const alpha = Math.round(Math.min(180, 40 + Math.abs(normalized) * 160));
+      const out = i * 4;
+      image.data[out] = shade;
+      image.data[out + 1] = shade;
+      image.data[out + 2] = shade;
+      image.data[out + 3] = alpha;
+    }
+
+    context.putImageData(image, 0, 0);
+    const canvasTexture = new THREE.CanvasTexture(canvas);
+    canvasTexture.wrapS = THREE.ClampToEdgeWrapping;
+    canvasTexture.wrapT = THREE.ClampToEdgeWrapping;
+    canvasTexture.minFilter = THREE.LinearFilter;
+    canvasTexture.magFilter = THREE.LinearFilter;
+    canvasTexture.colorSpace = THREE.SRGBColorSpace;
+    canvasTexture.needsUpdate = true;
+    return canvasTexture;
+  }, [detailMap]);
+
+  useEffect(() => () => texture?.dispose(), [texture]);
+
+  if (!detailMap || !texture) {
+    return null;
+  }
+
+  const directionRad = detailMap.directionDeg * Math.PI / 180;
+  const centerX = detailMap.originX + Math.cos(directionRad) * detailMap.lengthMm / 2 - WIDTH_MM / 2;
+  const centerZ = detailMap.originY + Math.sin(directionRad) * detailMap.lengthMm / 2 - HEIGHT_MM / 2;
+
+  return (
+    <group position={[centerX, 0.06, centerZ]} rotation={[0, -directionRad, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[detailMap.lengthMm, detailMap.widthMm]} />
+        <meshBasicMaterial
+          map={texture}
+          transparent
+          opacity={0.7}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+    </group>
   );
 };
 
@@ -405,6 +505,7 @@ const ForensicLab: React.FC<LabProps> = ({ simState, setSimState }) => {
   // Calculate light pos for main scene component too if needed, or just pass state down?
   // Actually, we can just render the light here.
   const [toolPath, setToolPath] = useState<ToolPathPoint[]>([]);
+  const [detailMap, setDetailMap] = useState<SurfaceDetailMap | null>(null);
   
   const rRad = simState.rakingLightAngle * Math.PI / 180;
   const lightH = 50 * Math.sin(rRad); // Height from surface (Y)
@@ -436,7 +537,13 @@ const ForensicLab: React.FC<LabProps> = ({ simState, setSimState }) => {
       <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.5} />
       
       <group position={[0, 0, 0]}>
-        <MaterialSurface simState={simState} setSimState={setSimState} onToolPathUpdate={setToolPath} />
+        <MaterialSurface
+          simState={simState}
+          setSimState={setSimState}
+          onToolPathUpdate={setToolPath}
+          onDetailMapUpdate={setDetailMap}
+        />
+        <DetailMapOverlay detailMap={detailMap} />
         
         {simState.showScales && (
             <>
