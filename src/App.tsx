@@ -14,6 +14,7 @@ export interface SimulationState {
   chatter: number; // 0-1 range (vibration intensity)
   timeStep: number; // seconds
   toolWear: number; // 0-1 range (micro-chipping/dullness)
+  materialThicknessMm: number; // mm
   material: 'aluminum' | 'steel' | 'brass' | 'wood' | 'gold';
   viewMode: 'standard' | 'heatmap' | 'normal';
   rakingLightAngle: number; // 0-90 degrees
@@ -54,6 +55,7 @@ function App() {
     chatter: 0.2,
     timeStep: 0.0005,
     toolWear: 0.1,
+    materialThicknessMm: 1.0,
     material: 'aluminum',
     viewMode: 'standard',
     rakingLightAngle: 10,

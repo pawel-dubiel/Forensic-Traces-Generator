@@ -32,7 +32,9 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
   };
 
   const timeStepValid = Number.isFinite(simState.timeStep) && simState.timeStep > 0;
+  const materialThicknessValid = Number.isFinite(simState.materialThicknessMm) && simState.materialThicknessMm > 0;
   const stepsPerSecond = timeStepValid ? 1 / simState.timeStep : 0;
+  const canExecute = timeStepValid && materialThicknessValid;
 
   return (
     <Box sx={{ p: 3 }}>
@@ -178,6 +180,24 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         </Select>
       </FormControl>
 
+      <Box sx={{ mb: 3 }}>
+        <Typography gutterBottom variant="body2">
+          Material Thickness ({Number.isFinite(simState.materialThicknessMm) ? simState.materialThicknessMm.toFixed(2) : 'invalid'} mm)
+        </Typography>
+        <Slider
+          value={Number.isFinite(simState.materialThicknessMm) ? simState.materialThicknessMm : 1}
+          onChange={(_, val) => handleNumberChange('materialThicknessMm', val)}
+          min={0.1} max={5} step={0.05}
+          valueLabelDisplay="auto"
+          color="secondary"
+        />
+        {!materialThicknessValid && (
+          <Typography variant="caption" color="error">
+            Material thickness must be a positive number
+          </Typography>
+        )}
+      </Box>
+
       <Divider sx={{ my: 3 }} />
 
       <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 2 }}>
@@ -258,7 +278,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         size="large" 
         startIcon={<PlayCircle />}
         onClick={onExecute}
-        disabled={!timeStepValid}
+        disabled={!canExecute}
         sx={{ 
           height: 50,
           background: 'linear-gradient(45deg, #00e5ff 30%, #2979ff 90%)',
