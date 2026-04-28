@@ -179,6 +179,31 @@ test('creates a high-resolution detail map for fine striations', () => {
     assert.ok(detailMap.widthSamples > 1);
     assert.ok(detailMap.maxHeight > detailMap.minHeight);
 });
+test('knife kernel has a sharp rounded edge and rising bevel profile', () => {
+    const engine = new ForensicPhysicsEngine(20, 20, 50, seed);
+    const kernel = engine.createToolKernel('knife', 1, 0, 45, 0, {
+        baseRandom: createSeededRandom(seed),
+        striationRandom: createSeededRandom(deriveSeed(seed, 1)),
+        striationsEnabled: false
+    });
+    let edgeX = 0;
+    let edgeY = 0;
+    let edgeZ = Infinity;
+    for (let i = 0; i < kernel.profile.length; i++) {
+        const z = kernel.profile[i];
+        if (z < edgeZ) {
+            edgeZ = z;
+            edgeX = i % kernel.width;
+            edgeY = Math.floor(i / kernel.width);
+        }
+    }
+    const nearBevelZ = kernel.profile[(edgeY + 2) * kernel.width + edgeX];
+    const farBevelZ = kernel.profile[(edgeY + 8) * kernel.width + edgeX];
+    assert.ok(edgeZ < 0.001);
+    assert.ok(nearBevelZ > edgeZ);
+    assert.ok(farBevelZ > nearBevelZ);
+    assert.ok(kernel.sharpness > 0.9);
+});
 test('higher friction material produces more trailing pile-up under the same force and tool', () => {
     const originalFriction = MATERIALS.aluminum.frictionCoefficient;
     try {
