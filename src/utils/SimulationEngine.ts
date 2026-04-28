@@ -63,12 +63,28 @@ interface MaterialConstants {
 // Material constants for the simulation loop
 export const MATERIALS: Record<MaterialType, MaterialConstants> = {
     // Brittleness: 0 = Clay (100% Flow), 1 = Glass (100% Fracture/Chip)
-    aluminum: { hardness: 0.5, mohsHardness: 2.75, flow: 0.8, brittleness: 0.1 },
-    brass: { hardness: 0.7, mohsHardness: 3.0, flow: 0.6, brittleness: 0.2 },
-    steel: { hardness: 0.9, mohsHardness: 5.5, flow: 0.3, brittleness: 0.1 },
-    wood: { hardness: 0.2, mohsHardness: 2.0, flow: 0.1, brittleness: 0.9 }, // High brittleness = Splintering
-    gold: { hardness: 0.3, mohsHardness: 2.5, flow: 0.95, brittleness: 0.0 }, // Very ductile, piles up easily
+    aluminum: { hardnessMPa: 245, mohsHardness: 2.75, flow: 0.8, brittleness: 0.1 },
+    brass: { hardnessMPa: 900, mohsHardness: 3.0, flow: 0.6, brittleness: 0.2 },
+    steel: { hardnessMPa: 1800, mohsHardness: 5.5, flow: 0.3, brittleness: 0.1 },
+    wood: { hardnessMPa: 40, mohsHardness: 2.0, flow: 0.1, brittleness: 0.9 }, // High brittleness = Splintering
+    gold: { hardnessMPa: 220, mohsHardness: 2.5, flow: 0.95, brittleness: 0.0 }, // Very ductile, piles up easily
 };
+
+const MOHS_TO_HARDNESS_MPA = [
+    10,
+    350,
+    1000,
+    1500,
+    3000,
+    6000,
+    11000,
+    15000,
+    21000,
+    100000,
+];
+
+const DETAIL_MAP_RESOLUTION = 240;
+const MAX_DETAIL_WIDTH_MM = 8;
 
 const TOOL_STRIATION_CONFIG: Record<string, { pitchMm: number; amplitudeMm: number; irregularity: number }> = {
     screwdriver: { pitchMm: 0.22, amplitudeMm: 0.015, irregularity: 0.45 },
@@ -735,6 +751,36 @@ export class ForensicPhysicsEngine {
         return fallback;
     }
 
+    private getDepthForContactArea(kernel: ToolKernel, targetAreaMm2: number): number {
+        this.validateNonNegativeFinite(targetAreaMm2, 'targetAreaMm2');
+        if (targetAreaMm2 === 0) {
+            return 0;
+        }
+        if (!kernel.contactPatchLUT || kernel.contactPatchLUT.length === 0) {
+            throw new Error('contactPatchLUT must be a non-empty array');
+        }
+
+        const lut = kernel.contactPatchLUT;
+        if (targetAreaMm2 <= lut[0].areaMm2) {
+            return lut[0].depth * (targetAreaMm2 / lut[0].areaMm2);
+        }
+
+        for (let i = 1; i < lut.length; i++) {
+            const prev = lut[i - 1];
+            const next = lut[i];
+            if (targetAreaMm2 <= next.areaMm2) {
+                const span = next.areaMm2 - prev.areaMm2;
+                if (span <= 0) {
+                    continue;
+                }
+                const t = (targetAreaMm2 - prev.areaMm2) / span;
+                return prev.depth + (next.depth - prev.depth) * t;
+            }
+        }
+
+        return kernel.maxProfileDepth;
+    }
+
     private buildContactPatchLUT(kernel: Float64Array, width: number, height: number) {
         let maxProfileDepth = 0;
         for (let i = 0; i < kernel.length; i++) {
@@ -869,10 +915,24 @@ export class ForensicPhysicsEngine {
         }
     }
 
-    private computeToolMaterialHardnessRatio(toolHardnessMohs: number, materialHardnessMohs: number): number {
+    private computeToolHardnessFactor(toolHardnessMohs: number, materialHardnessMPa: number): number {
         this.validateToolHardness(toolHardnessMohs);
-        this.validatePositiveFinite(materialHardnessMohs, 'materialHardnessMohs');
-        return Math.min(2, Math.max(0, toolHardnessMohs / materialHardnessMohs));
+        this.validatePositiveFinite(materialHardnessMPa, 'materialHardnessMPa');
+        const toolHardnessMPa = this.interpolateMohsHardnessMPa(toolHardnessMohs);
+        return Math.min(1, Math.max(0.05, toolHardnessMPa / materialHardnessMPa));
+    }
+
+    private interpolateMohsHardnessMPa(mohs: number): number {
+        this.validateToolHardness(mohs);
+        const lower = Math.floor(mohs);
+        const upper = Math.ceil(mohs);
+        if (lower === upper) {
+            return MOHS_TO_HARDNESS_MPA[lower - 1];
+        }
+        const lowerValue = MOHS_TO_HARDNESS_MPA[lower - 1];
+        const upperValue = MOHS_TO_HARDNESS_MPA[upper - 1];
+        const t = mohs - lower;
+        return lowerValue + (upperValue - lowerValue) * t;
     }
 
     private validateToolHardness(value: number) {
