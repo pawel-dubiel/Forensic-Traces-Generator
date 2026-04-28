@@ -396,7 +396,7 @@ export class ForensicPhysicsEngine {
                         const result = elasticPlastic.computePermanentDepth(penetration, characteristicLength, currentPlasticStrain);
                         if (result.permanentDepth > 0) {
                             const newHeight = currentHeight - result.permanentDepth;
-                            displacedVolume += result.permanentDepth;
+                            displacedVolume += result.permanentDepth * cellAreaMm2;
                             this.surface.data[idx] = newHeight;
                             if (Math.abs(newHeight) > maxDepth)
                                 maxDepth = Math.abs(newHeight);
@@ -423,17 +423,15 @@ export class ForensicPhysicsEngine {
                 // Ring r Perimeter approx: 2*(W+H) + 8*r
                 // Weight = 1/r.
                 // We need to sum (Pixels_in_Ring_r * Weight_r) to find normalization factor.
-                let totalWeightedArea = 0;
+                let totalWeightedAreaMm2 = 0;
                 const weights = [];
-                const ringPixels = [];
                 for (let r = 1; r <= range; r++) {
                     // Pixels in this ring = Area(r) - Area(r-1)
                     // Simplified: Perimeter is roughly 2w + 2h + 8r
                     const p = 2 * (kernel.width + kernel.height) + 8 * r;
                     const weight = 1.0 / r; // Decay
                     weights.push(weight);
-                    ringPixels.push(p);
-                    totalWeightedArea += p * weight;
+                    totalWeightedAreaMm2 += p * cellAreaMm2 * weight;
                 }
                 // Now distribute
                 for (let r = 1; r <= range; r++) {
@@ -441,7 +439,7 @@ export class ForensicPhysicsEngine {
                     // Volume for this ring = TotalVolume * ( (Pixels*Weight) / TotalWeightedArea )
                     // Height to add = VolumeRing / PixelsRing
                     // Combined: Height = (TotalVolume * Weight) / TotalWeightedArea
-                    const heightToAdd = (flowVolume * weight) / totalWeightedArea;
+                    const heightToAdd = (flowVolume * weight) / totalWeightedAreaMm2;
                     this.addPileUpRing(startX - r, startY - r, kernel.width + r * 2, kernel.height + r * 2, heightToAdd);
                 }
             }
