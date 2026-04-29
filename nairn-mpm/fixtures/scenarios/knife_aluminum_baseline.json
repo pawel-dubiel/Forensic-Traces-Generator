@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "knife-aluminum-baseline",
+  "outputName": "knife_aluminum_baseline",
+  "units": {
+    "length": "mm",
+    "time": "s",
+    "force": "N",
+    "stress": "MPa",
+    "density": "mg/mm^3"
+  },
+  "simulation": {
+    "dimension": "2d",
+    "widthMm": 60,
+    "heightMm": 60,
+    "thicknessMm": 1.2,
+    "cellSizeMm": 0.5,
+    "particlesPerElement": 4,
+    "timeStepSeconds": 0.000001,
+    "maxTimeSeconds": 0.004,
+    "archiveTimeSeconds": 0.001,
+    "originXmm": 0,
+    "originYmm": 0
+  },
+  "target": {
+    "material": "aluminum",
+    "thicknessMm": 1.2,
+    "materialModel": "IsoPlasticity",
+    "properties": {
+      "youngModulusMPa": 69000,
+      "poissonRatio": 0.33,
+      "densityMgPerMm3": 2.7,
+      "yieldStrengthMPa": 95,
+      "hardeningModulusMPa": 1500,
+      "frictionCoefficient": 0.47,
+      "tensileStrengthMPa": 110,
+      "fractureEnergyNPerMm": 18,
+      "criticalPlasticStrain": 0.12
+    }
+  },
+  "tool": {
+    "type": "knife",
+    "hardnessMohs": 8,
+    "forceN": 100,
+    "angleDeg": 45,
+    "directionDeg": 0,
+    "speedMmPerSec": 10,
+    "chatter": 0.2,
+    "wear": 0.1,
+    "startXmm": 10,
+    "startYmm": 30,
+    "pathLengthMm": 40,
+    "geometry": {
+      "edgeRadiusMm": 0.015,
+      "bevelHalfAngleDeg": 17,
+      "bladeLengthMm": 4,
+      "bladeThicknessMm": 0.12
+    }
+  },
+  "solver": {
+    "processors": 1,
+    "mpmMethod": "USF",
+    "archiveFields": ["position", "velocity", "stress", "strain", "history"],
+    "extractFields": ["velx", "vely", "dispx", "dispy"]
+  }
+}

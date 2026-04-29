@@ -1,0 +1,20 @@
+{
+  "name": "forensic-traces-nairn-mpm",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "NairnMPM sidecar prototype for forensic tool mark scenarios.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "validate-scenario": "node dist/src/cli.js validate-scenario",
+    "generate-input": "node dist/src/cli.js generate-input",
+    "run-scenario": "node dist/src/cli.js run-scenario",
+    "extract-results": "node dist/src/cli.js extract-results",
+    "summarize-result": "node dist/src/cli.js summarize-result"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "~5.9.3"
+  }
+}

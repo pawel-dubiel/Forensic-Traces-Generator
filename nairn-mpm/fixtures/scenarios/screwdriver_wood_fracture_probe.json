@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "screwdriver-wood-fracture-probe",
+  "outputName": "screwdriver_wood_fracture_probe",
+  "units": {
+    "length": "mm",
+    "time": "s",
+    "force": "N",
+    "stress": "MPa",
+    "density": "mg/mm^3"
+  },
+  "simulation": {
+    "dimension": "2d",
+    "widthMm": 60,
+    "heightMm": 60,
+    "thicknessMm": 1,
+    "cellSizeMm": 0.75,
+    "particlesPerElement": 4,
+    "timeStepSeconds": 0.000001,
+    "maxTimeSeconds": 0.006,
+    "archiveTimeSeconds": 0.001,
+    "originXmm": 0,
+    "originYmm": 0
+  },
+  "target": {
+    "material": "wood",
+    "thicknessMm": 1,
+    "materialModel": "IsoPlasticity",
+    "properties": {
+      "youngModulusMPa": 11000,
+      "poissonRatio": 0.32,
+      "densityMgPerMm3": 0.55,
+      "yieldStrengthMPa": 80,
+      "hardeningModulusMPa": 200,
+      "frictionCoefficient": 0.62,
+      "tensileStrengthMPa": 35,
+      "fractureEnergyNPerMm": 2.2,
+      "criticalPlasticStrain": 0.025
+    }
+  },
+  "tool": {
+    "type": "screwdriver",
+    "hardnessMohs": 8,
+    "forceN": 350,
+    "angleDeg": 35,
+    "directionDeg": 0,
+    "speedMmPerSec": 20,
+    "chatter": 0.35,
+    "wear": 0.2,
+    "startXmm": 10,
+    "startYmm": 30,
+    "pathLengthMm": 40,
+    "geometry": {
+      "bladeWidthMm": 6,
+      "bladeThicknessMm": 0.8,
+      "activeLengthMm": 6
+    }
+  },
+  "solver": {
+    "processors": 1,
+    "mpmMethod": "USF",
+    "archiveFields": ["position", "velocity", "stress", "strain", "history"],
+    "extractFields": ["velx", "vely", "dispx", "dispy"]
+  }
+}
