@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSurfaceMeshIndices, ForensicPhysicsEngine, MATERIALS } from '../src/utils/SimulationEngine.js';
+import { buildSurfaceMeshIndices, ForensicPhysicsEngine, getStrokeStart, MATERIALS, STROKE_LENGTH_MM } from '../src/utils/SimulationEngine.js';
 import { createSeededRandom, deriveSeed } from '../src/utils/random.js';
 import type { MaterialType, ToolKernel } from '../src/utils/SimulationEngine.js';
 
@@ -96,48 +96,6 @@ const simulateSurface = (
   const kernel = createKernel(engine, angleDeg, toolType, sizeMm);
   runSimulation(engine, kernel, force, toolHardness, material, 0, speed, 0, 0.002, materialThicknessMm);
   return { before, after: engine.surface.data, engine };
-};
-
-const trailingPileupVolume = (before: Float64Array, after: Float64Array, engine: ForensicPhysicsEngine) => {
-  const trailingEndX = Math.floor(10 * engine.surface.resolution);
-  const cellAreaMm2 = 1 / (engine.surface.resolution * engine.surface.resolution);
-  let volume = 0;
-
-  for (let y = 0; y < engine.surface.height; y++) {
-    for (let x = 0; x < trailingEndX; x++) {
-      const idx = y * engine.surface.width + x;
-      const delta = after[idx] - before[idx];
-      if (delta > 0) {
-        volume += delta * cellAreaMm2;
-      }
-    }
-  }
-
-  return volume;
-};
-
-const roughnessInCutBand = (before: Float64Array, after: Float64Array, engine: ForensicPhysicsEngine) => {
-  const values: number[] = [];
-  const minY = Math.floor(26 * engine.surface.resolution);
-  const maxY = Math.floor(34 * engine.surface.resolution);
-
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = 0; x < engine.surface.width; x++) {
-      const idx = y * engine.surface.width + x;
-      const delta = after[idx] - before[idx];
-      if (delta < -0.001) {
-        values.push(delta);
-      }
-    }
-  }
-
-  if (values.length < 2) {
-    throw new Error('cut band must contain enough lowered cells');
-  }
-
-  const mean = values.reduce((acc, value) => acc + value, 0) / values.length;
-  const variance = values.reduce((acc, value) => acc + (value - mean) ** 2, 0) / values.length;
-  return Math.sqrt(variance);
 };
 
 const meanCutDepthInCutBand = (before: Float64Array, after: Float64Array, engine: ForensicPhysicsEngine) => {
@@ -242,7 +200,7 @@ test('higher force produces a deeper trace', () => {
 });
 
 test('tool hardness affects cutting depth', () => {
-  const softTool = simulate(100, 1, 'steel');
+  const softTool = simulate(100, 3, 'steel');
   const hardTool = simulate(100, 10, 'steel');
 
   assert.ok(softTool.changed > 0);
@@ -311,18 +269,21 @@ test('knife kernel has a sharp rounded edge and rising bevel profile', () => {
   assert.ok(kernel.sharpness > 0.9);
 });
 
-test('higher friction material produces more trailing pile-up under the same force and tool', () => {
+test('higher friction smears more of the cut material back into the groove', () => {
   const originalFriction = MATERIALS.aluminum.frictionCoefficient;
+  // What was cut out of the plate but is no longer missing from the groove was smeared back behind the tool.
+  const smearedBackVolume = (friction: number) => {
+    MATERIALS.aluminum.frictionCoefficient = friction;
+    const { summary, engine, before } = runStroke('screwdriver', 6, 'aluminum', 100);
+    return summary.carvedVolumeMm3 - netRemovedVolume(before, engine);
+  };
 
   try {
-    MATERIALS.aluminum.frictionCoefficient = 0.05;
-    const lowerFriction = simulateSurface(100, 8, 'aluminum');
+    const lowerFriction = smearedBackVolume(0.05);
+    const higherFriction = smearedBackVolume(0.95);
 
-    MATERIALS.aluminum.frictionCoefficient = 0.95;
-    const higherFriction = simulateSurface(100, 8, 'aluminum');
-
-    assert.ok(trailingPileupVolume(higherFriction.before, higherFriction.after, higherFriction.engine) >
-      trailingPileupVolume(lowerFriction.before, lowerFriction.after, lowerFriction.engine));
+    assert.ok(lowerFriction > 0);
+    assert.ok(higherFriction > lowerFriction);
   } finally {
     MATERIALS.aluminum.frictionCoefficient = originalFriction;
   }
@@ -334,8 +295,13 @@ test('higher speed increases shear roughness while preserving comparable depth',
   const slowDepth = meanCutDepthInCutBand(slow.before, slow.after, slow.engine);
   const fastDepth = meanCutDepthInCutBand(fast.before, fast.after, fast.engine);
   const relativeDepthDifference = Math.abs(fastDepth - slowDepth) / slowDepth;
+  const slowDetail = slow.engine.getSurfaceDetailMap();
+  const fastDetail = fast.engine.getSurfaceDetailMap();
 
-  assert.ok(roughnessInCutBand(fast.before, fast.after, fast.engine) > roughnessInCutBand(slow.before, slow.after, slow.engine));
+  // Tearing shows in the fine texture. The coarse groove also carries hand tremor, which is wavier at low speed.
+  assert.ok(slowDetail);
+  assert.ok(fastDetail);
+  assert.ok(fastDetail.maxHeight - fastDetail.minHeight > slowDetail.maxHeight - slowDetail.minHeight);
   assert.ok(relativeDepthDifference < 0.5);
 });
 
@@ -492,4 +458,408 @@ test('fails fast for invalid simulation parameters', () => {
     () => Array.from(engine.simulateCutGenerator(10, 30, 0, 10, kernel, 'aluminum', 0, 8, 20, 0, 0.002)),
     /materialThicknessMm/
   );
+});
+
+const runStroke = (
+  toolType: string,
+  sizeMm: number,
+  material: MaterialType,
+  force: number,
+  directionDeg = 0,
+  chatter = 0,
+  timeStep = 0.002
+) => {
+  const engine = new ForensicPhysicsEngine(60, 60, 10, seed);
+  const before = new Float64Array(engine.surface.data);
+  const kernel = engine.createToolKernel(toolType, sizeMm, 0.1, 45, directionDeg, {
+    baseRandom: createSeededRandom(seed),
+    striationRandom: createSeededRandom(deriveSeed(seed, 1)),
+    striationsEnabled: true
+  });
+  const start = getStrokeStart(60, 60, directionDeg);
+  Array.from(engine.simulateCutGenerator(
+    start.x,
+    start.y,
+    directionDeg,
+    force,
+    kernel,
+    material,
+    MATERIALS[material].defaultThicknessMm,
+    8,
+    20,
+    chatter,
+    timeStep
+  ));
+  const summary = engine.getCutSummary();
+  assert.ok(summary);
+  return { engine, before, kernel, summary };
+};
+
+const netRemovedVolume = (before: Float64Array, engine: ForensicPhysicsEngine) => {
+  const cellAreaMm2 = 1 / (engine.surface.resolution * engine.surface.resolution);
+  let volume = 0;
+  for (let i = 0; i < before.length; i++) {
+    const delta = engine.surface.data[i] - before[i];
+    if (delta < 0) {
+      volume -= delta * cellAreaMm2;
+    }
+  }
+  return volume;
+};
+
+test('a harder target takes a shallower mark under the same load', () => {
+  const aluminum = runStroke('screwdriver', 6, 'aluminum', 150);
+  const steel = runStroke('screwdriver', 6, 'steel', 150);
+
+  assert.ok(steel.summary.maxCutDepthMm > 0);
+  assert.ok(steel.summary.maxCutDepthMm < aluminum.summary.maxCutDepthMm);
+  assert.ok(steel.summary.carvedVolumeMm3 < aluminum.summary.carvedVolumeMm3);
+});
+
+test('chatter does not dig a mark that the load cannot make', () => {
+  const steady = runStroke('screwdriver', 6, 'steel', 1, 0, 0);
+  const chattering = runStroke('screwdriver', 6, 'steel', 1, 0, 1);
+
+  assert.ok(chattering.summary.maxCutDepthMm < 0.01);
+  assert.ok(chattering.summary.carvedVolumeMm3 <= steady.summary.carvedVolumeMm3 + 0.01);
+});
+
+test('a flat face under a light load only burnishes the surface finish', () => {
+  const engine = new ForensicPhysicsEngine(60, 60, 10, seed);
+  const kernel = createKernel(engine, 90, 'hammer_face', 25);
+  runSimulation(engine, kernel, 50, 8, 'steel');
+  const burnished = engine.getCutSummary();
+  const cut = runStroke('screwdriver', 6, 'aluminum', 150);
+
+  assert.ok(burnished);
+  // The plate's own roughness is several microns, so anything shallower is not a visible mark.
+  assert.ok(burnished.maxCutDepthMm < 0.005, `burnished depth ${burnished.maxCutDepthMm}`);
+  assert.ok(burnished.carvedVolumeMm3 < cut.summary.carvedVolumeMm3 / 100);
+  assert.ok(cut.summary.maxCutDepthMm > 0.03);
+});
+
+test('a centred stroke stays on the plate for every drag direction', () => {
+  for (let directionDeg = 0; directionDeg < 360; directionDeg += 15) {
+    const start = getStrokeStart(60, 60, directionDeg);
+    const rad = directionDeg * Math.PI / 180;
+    const endX = start.x + Math.cos(rad) * STROKE_LENGTH_MM;
+    const endY = start.y + Math.sin(rad) * STROKE_LENGTH_MM;
+
+    for (const value of [start.x, start.y, endX, endY]) {
+      assert.ok(value >= 0 && value <= 60, `direction ${directionDeg} leaves the plate`);
+    }
+  }
+});
+
+test('the tool profile and its contact table do not depend on the drag direction', () => {
+  const engine = new ForensicPhysicsEngine(60, 60, 20, seed);
+  const createFor = (directionDeg: number) => engine.createToolKernel('screwdriver', 6, 0.1, 45, directionDeg, {
+    baseRandom: createSeededRandom(seed),
+    striationRandom: createSeededRandom(deriveSeed(seed, 1)),
+    striationsEnabled: true
+  });
+
+  const straight = createFor(0);
+  for (const directionDeg of [30, 45, 135, 250]) {
+    const rotated = createFor(directionDeg);
+    assert.deepEqual(rotated.profile, straight.profile, `profile differs at ${directionDeg}`);
+    assert.deepEqual(rotated.contactPatchLUT, straight.contactPatchLUT, `contact table differs at ${directionDeg}`);
+  }
+});
+
+test('the same stroke carves the same mark in any drag direction', () => {
+  const straight = runStroke('screwdriver', 6, 'aluminum', 150, 0);
+
+  // 30 and 250 degrees line up with neither the grid axes nor its diagonals.
+  for (const directionDeg of [30, 45, 250]) {
+    const turned = runStroke('screwdriver', 6, 'aluminum', 150, directionDeg);
+    const carvedDifference = Math.abs(turned.summary.carvedVolumeMm3 - straight.summary.carvedVolumeMm3) / straight.summary.carvedVolumeMm3;
+    const straightRemoved = netRemovedVolume(straight.before, straight.engine);
+    const removedDifference = Math.abs(netRemovedVolume(turned.before, turned.engine) - straightRemoved) / straightRemoved;
+    const depthDifference = Math.abs(turned.summary.maxCutDepthMm - straight.summary.maxCutDepthMm) / straight.summary.maxCutDepthMm;
+
+    assert.ok(carvedDifference < 0.05, `carved volume differs by ${carvedDifference} at ${directionDeg}`);
+    assert.ok(removedDifference < 0.08, `groove volume differs by ${removedDifference} at ${directionDeg}`);
+    assert.ok(depthDifference < 0.2, `depth differs by ${depthDifference} at ${directionDeg}`);
+  }
+});
+
+test('a knife scored into aluminium at any direction does not tear the plate', () => {
+  for (const directionDeg of [0, 45]) {
+    const { summary } = runStroke('knife', 4, 'aluminum', 150, directionDeg);
+
+    assert.ok(summary.maxCutDepthMm > 0.1);
+    assert.ok(summary.maxCutDepthMm < MATERIALS.aluminum.defaultThicknessMm / 2);
+    assert.equal(summary.detachedCells, 0, `plate torn at ${directionDeg}`);
+  }
+});
+
+test('the hand tremor is the same path whatever the time step', () => {
+  const coarse = runStroke('screwdriver', 6, 'aluminum', 100, 0, 0, 0.004);
+  const fine = runStroke('screwdriver', 6, 'aluminum', 100, 0, 0, 0.0005);
+  const coarsePath = coarse.engine.getToolPath();
+  const finePath = fine.engine.getToolPath();
+  const coarseEnd = coarsePath[coarsePath.length - 1];
+  const fineEnd = finePath[finePath.length - 1];
+  const start = getStrokeStart(60, 60, 0);
+
+  assert.ok(Math.abs(coarseEnd.x - fineEnd.x) < 1e-6);
+  assert.ok(Math.abs(coarseEnd.y - fineEnd.y) < 1e-6);
+  let widestWander = 0;
+  for (const point of finePath) {
+    widestWander = Math.max(widestWander, Math.abs(point.y - start.y));
+  }
+  assert.ok(widestWander > 0.005, 'the path should wander');
+  assert.ok(widestWander < 0.25, `the path wandered ${widestWander} mm`);
+});
+
+test('pile-up never holds more material than was cut out of the plate', () => {
+  for (const [toolType, sizeMm, material] of [['screwdriver', 6, 'aluminum'], ['knife', 4, 'gold'], ['crowbar', 10, 'brass']] as const) {
+    const { engine, before, summary } = runStroke(toolType, sizeMm, material, 300);
+    const cellAreaMm2 = 1 / (engine.surface.resolution * engine.surface.resolution);
+    let raisedVolume = 0;
+    for (let i = 0; i < before.length; i++) {
+      const delta = engine.surface.data[i] - before[i];
+      if (delta > 0) {
+        raisedVolume += delta * cellAreaMm2;
+      }
+    }
+
+    assert.ok(summary.carvedVolumeMm3 > 0);
+    assert.ok(raisedVolume > 0);
+    assert.ok(raisedVolume < summary.carvedVolumeMm3, `${toolType} on ${material} raised ${raisedVolume} of ${summary.carvedVolumeMm3}`);
+    // The groove left behind cannot be bigger than what was cut.
+    assert.ok(netRemovedVolume(before, engine) <= summary.carvedVolumeMm3 + 1e-9);
+  }
+});
+
+test('a ball scratch is as wide as scratch hardness predicts', () => {
+  // ASTM G171: scratch hardness = 8 P / (pi w^2), because a sliding ball is carried by its leading half.
+  // A scratch in a material of indentation hardness H should give back about H.
+  const loadN = 300;
+  const engine = new ForensicPhysicsEngine(60, 60, 20, seed);
+  const before = new Float64Array(engine.surface.data);
+  const kernel = engine.createToolKernel('crowbar', 10, 0, 90, 0, {
+    baseRandom: createSeededRandom(seed),
+    striationRandom: createSeededRandom(deriveSeed(seed, 1)),
+    striationsEnabled: false
+  });
+  const start = getStrokeStart(60, 60, 0);
+  Array.from(engine.simulateCutGenerator(start.x, start.y, 0, loadN, kernel, 'aluminum', 3, 10, 20, 0, 0.002));
+
+  const res = engine.surface.resolution;
+  const widths: number[] = [];
+  for (let x = 20 * res; x <= 40 * res; x += res) {
+    let cells = 0;
+    for (let y = 25 * res; y <= 35 * res; y++) {
+      if (engine.surface.data[y * engine.surface.width + x] - before[y * engine.surface.width + x] < -0.002) {
+        cells++;
+      }
+    }
+    widths.push(cells / res);
+  }
+  widths.sort((a, b) => a - b);
+  const widthMm = widths[Math.floor(widths.length / 2)];
+  const scratchHardnessMPa = 8 * loadN / (Math.PI * widthMm * widthMm);
+
+  assert.ok(widthMm > 1, `scratch width ${widthMm}`);
+  assert.ok(
+    Math.abs(scratchHardnessMPa - MATERIALS.aluminum.hardnessMPa) / MATERIALS.aluminum.hardnessMPa < 0.25,
+    `scratch hardness ${scratchHardnessMPa} MPa from a ${widthMm} mm scratch`
+  );
+});
+
+test('pile-up forms ridges beside the groove and leaves the groove open', () => {
+  const { engine, before, summary } = runStroke('knife', 4, 'aluminum', 50);
+  const res = engine.surface.resolution;
+  const centreline: number[] = [];
+  let farthestRidgeMm = 0;
+  let highestRidge = 0;
+  let highestRidgeOffsetMm = 0;
+
+  // The middle of the stroke, clear of the prow left where the tool stopped.
+  for (let y = 0; y < engine.surface.height; y++) {
+    for (let x = 15 * res; x <= 45 * res; x++) {
+      const delta = engine.surface.data[y * engine.surface.width + x] - before[y * engine.surface.width + x];
+      const offsetMm = Math.abs(y / res - 30);
+      if (delta > 0.002) {
+        farthestRidgeMm = Math.max(farthestRidgeMm, offsetMm);
+      }
+      if (delta > highestRidge) {
+        highestRidge = delta;
+        highestRidgeOffsetMm = offsetMm;
+      }
+    }
+  }
+  for (let x = 15 * res; x <= 45 * res; x++) {
+    let deepest = 0;
+    for (let y = 29 * res; y <= 31 * res; y++) {
+      deepest = Math.min(deepest, engine.surface.data[y * engine.surface.width + x] - before[y * engine.surface.width + x]);
+    }
+    centreline.push(deepest);
+  }
+  centreline.sort((a, b) => a - b);
+
+  assert.ok(highestRidge > 0.002);
+  // The ridge crest sits at the edge of the groove, and the ridge is lower than the groove is deep.
+  assert.ok(highestRidgeOffsetMm < 1, `ridge crest ${highestRidgeOffsetMm} mm from the cut`);
+  assert.ok(highestRidge < summary.maxCutDepthMm);
+  assert.ok(farthestRidgeMm < 2, `ridge found ${farthestRidgeMm} mm from the cut`);
+  assert.ok(centreline[Math.floor(centreline.length / 2)] < -0.02);
+});
+
+test('a very small time step does not multiply the work', () => {
+  const started = performance.now();
+  const fine = runStroke('screwdriver', 6, 'aluminum', 100, 0, 0.2, 1e-7);
+  const elapsedMs = performance.now() - started;
+  const path = fine.engine.getToolPath();
+
+  assert.ok(elapsedMs < 20000, `run took ${elapsedMs} ms`);
+  assert.ok(Math.abs(path[path.length - 1].time - STROKE_LENGTH_MM / 20) < 1e-6);
+  assert.ok(fine.summary.carvedVolumeMm3 > 0);
+});
+
+const runStrike = (
+  toolType: string,
+  sizeMm: number,
+  material: MaterialType,
+  energyJ: number,
+  angleDeg = 90,
+  directionDeg = 0,
+  thicknessMm = 3,
+  resolution = 10
+) => {
+  const engine = new ForensicPhysicsEngine(60, 60, resolution, seed);
+  const before = new Float64Array(engine.surface.data);
+  const kernel = engine.createToolKernel(toolType, sizeMm, 0.1, angleDeg, directionDeg, {
+    baseRandom: createSeededRandom(seed),
+    striationRandom: createSeededRandom(deriveSeed(seed, 1)),
+    striationsEnabled: true
+  });
+  Array.from(engine.simulateStrikeGenerator(30, 30, energyJ, kernel, material, thicknessMm, 8));
+  const summary = engine.getCutSummary();
+  assert.ok(summary);
+
+  // Extent of the impression: cells pressed more than 2 microns below where they were.
+  const res = engine.surface.resolution;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let pressedCells = 0;
+  for (let y = 0; y < engine.surface.height; y++) {
+    for (let x = 0; x < engine.surface.width; x++) {
+      if (engine.surface.data[y * engine.surface.width + x] - before[y * engine.surface.width + x] < -0.002) {
+        pressedCells++;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  return {
+    engine,
+    before,
+    summary,
+    pressedAreaMm2: pressedCells / (res * res),
+    extentXMm: pressedCells > 0 ? (maxX - minX + 1) / res : 0,
+    extentYMm: pressedCells > 0 ? (maxY - minY + 1) / res : 0
+  };
+};
+
+test('a square hammer blow leaves a round impression the size of the face', () => {
+  const blow = runStrike('hammer_face', 25, 'aluminum', 5);
+
+  // The flat of the face is 20 mm across; the chamfer around it stays clear of the surface.
+  assert.ok(blow.extentXMm > 19 && blow.extentXMm < 22, `impression is ${blow.extentXMm} mm long`);
+  assert.ok(Math.abs(blow.extentXMm - blow.extentYMm) < 1, `impression is ${blow.extentXMm} by ${blow.extentYMm} mm`);
+  assert.ok(blow.summary.maxCutDepthMm > 0.03);
+  assert.ok(blow.summary.maxPileUpMm < blow.summary.maxCutDepthMm);
+  assert.equal(blow.summary.detachedCells, 0);
+  assert.equal(blow.engine.getSurfaceDetailMap(), null);
+});
+
+test('a harder blow leaves a deeper impression and no blow leaves none', () => {
+  const none = runStrike('hammer_face', 25, 'aluminum', 0);
+  const light = runStrike('hammer_face', 25, 'aluminum', 5);
+  const heavy = runStrike('hammer_face', 25, 'aluminum', 15);
+
+  assert.equal(none.summary.carvedVolumeMm3, 0);
+  assert.deepEqual(none.engine.surface.data, none.before);
+  assert.ok(heavy.summary.maxCutDepthMm > light.summary.maxCutDepthMm);
+  assert.ok(heavy.summary.carvedVolumeMm3 > light.summary.carvedVolumeMm3);
+});
+
+test('a softer target takes a deeper impression from the same blow', () => {
+  const aluminum = runStrike('hammer_face', 25, 'aluminum', 8);
+  const steel = runStrike('hammer_face', 25, 'steel', 8);
+
+  assert.ok(aluminum.summary.maxCutDepthMm > steel.summary.maxCutDepthMm);
+  assert.ok(aluminum.summary.carvedVolumeMm3 > steel.summary.carvedVolumeMm3);
+});
+
+test('a blow that lands on the edge of the face leaves a crescent', () => {
+  const square = runStrike('hammer_face', 25, 'aluminum', 5);
+  const edgeOn = runStrike('hammer_face', 25, 'aluminum', 5, 60);
+
+  // The rim digs in along an arc: a mark much longer across the tool than along it, and far smaller
+  // and deeper than the print of the whole face.
+  assert.ok(edgeOn.extentYMm > 2 * edgeOn.extentXMm, `mark is ${edgeOn.extentXMm} by ${edgeOn.extentYMm} mm`);
+  assert.ok(edgeOn.pressedAreaMm2 < square.pressedAreaMm2 / 4);
+  assert.ok(edgeOn.summary.maxCutDepthMm > 3 * square.summary.maxCutDepthMm);
+});
+
+test('an edge-on blow leaves the same mark whichever way the tool is turned', () => {
+  const ahead = runStrike('hammer_face', 25, 'aluminum', 5, 60, 0);
+  const turned = runStrike('hammer_face', 25, 'aluminum', 5, 60, 120);
+  const carvedDifference = Math.abs(turned.summary.carvedVolumeMm3 - ahead.summary.carvedVolumeMm3) / ahead.summary.carvedVolumeMm3;
+  const areaDifference = Math.abs(turned.pressedAreaMm2 - ahead.pressedAreaMm2) / ahead.pressedAreaMm2;
+
+  assert.ok(carvedDifference < 0.05, `carved volume differs by ${carvedDifference}`);
+  assert.ok(areaDifference < 0.08, `impression area differs by ${areaDifference}`);
+});
+
+test('a ball driven in by a blow goes as deep as the energy and hardness allow', () => {
+  // Plastic work = hardness x displaced volume (Tabor), and a ball of radius R pressed in by d
+  // displaces a spherical cap of pi d^2 (R - d / 3).
+  const energyJ = 1;
+  const radiusMm = 5;
+  const engine = new ForensicPhysicsEngine(60, 60, 20, seed);
+  const kernel = engine.createToolKernel('crowbar', 2 * radiusMm, 0, 90, 0, {
+    baseRandom: createSeededRandom(seed),
+    striationRandom: createSeededRandom(deriveSeed(seed, 1)),
+    striationsEnabled: false
+  });
+  Array.from(engine.simulateStrikeGenerator(30, 30, energyJ, kernel, 'aluminum', 5, 10));
+  const summary = engine.getCutSummary();
+  assert.ok(summary);
+  const penetrationMm = -Math.min(...engine.getToolPath().map(point => point.toolZ));
+  const capVolumeMm3 = Math.PI * penetrationMm * penetrationMm * (radiusMm - penetrationMm / 3);
+  const expectedVolumeMm3 = energyJ * 1000 / MATERIALS.aluminum.hardnessMPa;
+
+  // The ball carries a fine machining texture, so it is not an exact sphere.
+  assert.ok(Math.abs(capVolumeMm3 - expectedVolumeMm3) / expectedVolumeMm3 < 0.05, `cap volume ${capVolumeMm3} for ${expectedVolumeMm3}`);
+  // What stays after the ball lifts off is that impression less its elastic recovery.
+  assert.ok(summary.carvedVolumeMm3 < expectedVolumeMm3);
+  assert.ok(summary.carvedVolumeMm3 > 0.6 * expectedVolumeMm3);
+  assert.ok(summary.maxCutDepthMm > 0.8 * penetrationMm);
+});
+
+test('surface height can be read between grid points and is undefined off the plate', () => {
+  const { engine } = runStroke('knife', 4, 'aluminum', 100);
+
+  assert.ok(engine.getSurfaceHeightAt(30, 30) < -0.02);
+  assert.ok(Math.abs(engine.getSurfaceHeightAt(30.013, 12.37)) < 0.02);
+  assert.ok(Number.isNaN(engine.getSurfaceHeightAt(-1, 30)));
+  assert.ok(Number.isNaN(engine.getSurfaceHeightAt(30, 60.5)));
+});
+
+test('fails fast for invalid strike parameters', () => {
+  const engine = new ForensicPhysicsEngine(60, 60, 10, seed);
+  const kernel = createKernel(engine, 90, 'hammer_face', 25);
+
+  assert.throws(() => Array.from(engine.simulateStrikeGenerator(30, 30, -1, kernel, 'aluminum', 1, 8)), /energyJ/);
+  assert.throws(() => Array.from(engine.simulateStrikeGenerator(30, 30, Number.NaN, kernel, 'aluminum', 1, 8)), /energyJ/);
+  assert.throws(() => Array.from(engine.simulateStrikeGenerator(30, 30, 5, kernel, 'aluminum', 0, 8)), /materialThicknessMm/);
 });

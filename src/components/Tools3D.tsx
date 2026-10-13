@@ -3,26 +3,33 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 
 // Materials
+// The tools are drawn at true scale, so they are see-through ghosts: a hammer head would otherwise hide the plate.
+const ghost = { transparent: true, opacity: 0.4, depthWrite: false };
+
 const steelMaterial = new THREE.MeshStandardMaterial({ 
     color: '#888888', 
     metalness: 0.9, 
-    roughness: 0.2 
+    roughness: 0.2,
+    ...ghost
 });
 
 const plasticHandleMaterial = new THREE.MeshStandardMaterial({ 
     color: '#cc3333', 
-    roughness: 0.2 
+    roughness: 0.2,
+    ...ghost
 });
 
 const woodHandleMaterial = new THREE.MeshStandardMaterial({ 
     color: '#8f5e38', 
-    roughness: 0.8 
+    roughness: 0.8,
+    ...ghost
 });
 
 const blackMetalMaterial = new THREE.MeshStandardMaterial({ 
     color: '#333333', 
     metalness: 0.8, 
-    roughness: 0.6 
+    roughness: 0.6,
+    ...ghost
 });
 
 export const ScrewdriverModel: React.FC = () => {
@@ -75,7 +82,8 @@ export const KnifeModel: React.FC = () => {
     }, []);
 
     return (
-        <group rotation={[Math.PI, 0, 0]}>
+        // Blade runs back along +Z from the tip, like the other tools; any other turn puts it under the plate.
+        <group rotation={[Math.PI/2, 0, 0]}>
             <mesh geometry={bladeGeometry} material={steelMaterial} />
             <mesh position={[0, 110, 0]} material={blackMetalMaterial}>
                 <boxGeometry args={[10, 30, 25]} />
@@ -102,19 +110,20 @@ export const CrowbarModel: React.FC = () => {
 };
 
 export const HammerFaceModel: React.FC = () => {
+    // The head runs back from the face along the tool axis (Z); the handle is square to it,
+    // so the face lands flat when the tool is held at 90 degrees.
     return (
         <group rotation={[0, 0, 0]}>
-             <mesh position={[0, 25, 0]} rotation={[0, 0, Math.PI/2]} material={steelMaterial}>
-                <cylinderGeometry args={[15, 15, 100, 16]} />
+             <mesh position={[0, 0, 40]} rotation={[Math.PI/2, 0, 0]} material={steelMaterial}>
+                <cylinderGeometry args={[11, 11, 64, 16]} />
              </mesh>
-             {/* Face Plate - Shifted so surface is at 0 */}
-             {/* Cylinder height 10. Center was 0. Surface was -5. Move to +5. */}
-             <mesh position={[0, 5, 0]} rotation={[Math.PI/2, 0, 0]} material={steelMaterial}>
-                 <cylinderGeometry args={[12.5, 14, 10, 32]} />
+             {/* Face Plate - its striking surface is at 0 */}
+             <mesh position={[0, 0, 4]} rotation={[Math.PI/2, 0, 0]} material={steelMaterial}>
+                 <cylinderGeometry args={[14, 12.5, 8, 32]} />
              </mesh>
              
-             <mesh position={[0, 25, 50]} rotation={[Math.PI/2, 0, 0]} material={woodHandleMaterial}>
-                <cylinderGeometry args={[10, 12, 300, 16]} />
+             <mesh position={[0, 150, 40]} material={woodHandleMaterial}>
+                <cylinderGeometry args={[9, 11, 300, 16]} />
              </mesh>
         </group>
     );

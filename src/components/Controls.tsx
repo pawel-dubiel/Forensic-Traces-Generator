@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Box, Typography, Slider, MenuItem, Select, FormControl, InputLabel, Button, Divider, FormControlLabel, Checkbox, TextField } from '@mui/material';
 import type { SimulationState } from '../App';
 import { PlayCircle, Trash2 } from 'lucide-react';
@@ -9,6 +9,40 @@ interface ControlsProps {
   onExecute: () => void;
   onReset: () => void;
 }
+
+// The seed rebuilds the whole plate, so it is committed on blur or Enter rather than on every keystroke.
+const SeedField: React.FC<{ seed: number; disabled: boolean; onCommit: (seed: number) => void }> = ({ seed, disabled, onCommit }) => {
+  const [draft, setDraft] = useState(String(seed));
+  const parsed = draft.trim() === '' ? NaN : Number(draft);
+  const valid = Number.isInteger(parsed) && parsed >= 0 && parsed <= 0xffffffff;
+
+  const commit = () => {
+    if (valid && parsed !== seed) {
+      onCommit(parsed);
+    }
+  };
+
+  return (
+    <TextField
+      label="Random Seed"
+      type="number"
+      size="small"
+      value={draft}
+      disabled={disabled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          commit();
+        }
+      }}
+      inputProps={{ min: 0, step: 1 }}
+      error={!valid}
+      helperText={valid ? 'Same seed and settings reproduce the same mark. Changing it clears the surface.' : 'Seed must be a whole number from 0 to 4294967295'}
+      fullWidth
+    />
+  );
+};
 
 const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, onReset }) => {
   
@@ -27,6 +61,11 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
     setSimState(prev => ({ ...prev, [key]: value }));
   };
 
+  // A hammer face is struck, everything else is dragged. The action can still be changed afterwards.
+  const handleToolChange = (toolType: SimulationState['toolType']) => {
+    setSimState(prev => ({ ...prev, toolType, action: toolType === 'hammer_face' ? 'strike' : 'drag' }));
+  };
+
   const handleNumberChange = (key: NumericSimulationKey, value: number | number[]) => {
     setSimState(prev => ({ ...prev, [key]: readSliderNumber(value) }));
   };
@@ -34,7 +73,11 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
   const timeStepValid = Number.isFinite(simState.timeStep) && simState.timeStep > 0;
   const materialThicknessValid = Number.isFinite(simState.materialThicknessMm) && simState.materialThicknessMm > 0;
   const stepsPerSecond = timeStepValid ? 1 / simState.timeStep : 0;
-  const canExecute = timeStepValid && materialThicknessValid;
+  // Settings are locked while a pass is running: the pass uses the values it started with.
+  const locked = simState.isSimulating;
+  const striking = simState.action === 'strike';
+  // The time step only applies to a drag.
+  const canExecute = (striking || timeStepValid) && materialThicknessValid && !locked;
 
   return (
     <Box sx={{ p: 3 }}>
@@ -42,12 +85,12 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         Tool Configuration
       </Typography>
       
-      <FormControl fullWidth size="small" sx={{ mt: 2, mb: 3 }}>
+      <FormControl fullWidth size="small" sx={{ mt: 2, mb: 3 }} disabled={locked}>
         <InputLabel>Tool Profile</InputLabel>
         <Select
           value={simState.toolType}
           label="Tool Profile"
-          onChange={(e) => handleChange('toolType', e.target.value as SimulationState['toolType'])}
+          onChange={(e) => handleToolChange(e.target.value as SimulationState['toolType'])}
         >
           <MenuItem value="screwdriver">Flathead Screwdriver</MenuItem>
           <MenuItem value="knife">Knife Edge</MenuItem>
@@ -59,12 +102,25 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         </Select>
       </FormControl>
 
+      <FormControl fullWidth size="small" sx={{ mb: 3 }} disabled={locked}>
+        <InputLabel>Action</InputLabel>
+        <Select
+          value={simState.action}
+          label="Action"
+          onChange={(e) => handleChange('action', e.target.value as SimulationState['action'])}
+        >
+          <MenuItem value="drag">Drag (scrape 40 mm)</MenuItem>
+          <MenuItem value="strike">Strike (single blow)</MenuItem>
+        </Select>
+      </FormControl>
+
       <Typography gutterBottom variant="body2">Tool Hardness (Mohs)</Typography>
       <Slider
         value={simState.toolHardness}
         onChange={(_, val) => handleNumberChange('toolHardness', val)}
         min={1} max={10} step={0.5}
         valueLabelDisplay="auto"
+        disabled={locked}
         sx={{ mb: 3 }}
       />
 
@@ -82,71 +138,98 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
             onChange={(_, val) => handleNumberChange('angle', val)}
             min={1} max={90}
             valueLabelDisplay="auto"
+            disabled={locked}
           />
         </Box>
 
-        <Box>
-          <Typography gutterBottom variant="body2">Applied Force (N)</Typography>
-          <Slider
-            value={simState.force}
-            onChange={(_, val) => handleNumberChange('force', val)}
-            min={0} max={500}
-            valueLabelDisplay="auto"
-            color="secondary"
-          />
-        </Box>
+        {striking ? (
+          <Box>
+            <Typography gutterBottom variant="body2">Blow Energy ({simState.impactEnergy.toFixed(1)} J)</Typography>
+            <Slider
+              value={simState.impactEnergy}
+              onChange={(_, val) => handleNumberChange('impactEnergy', val)}
+              min={0} max={30} step={0.5}
+              valueLabelDisplay="auto"
+              disabled={locked}
+              color="secondary"
+            />
+            <Typography variant="caption" color="text.secondary">
+              A 450 g hammer swung at 5 m/s delivers about 5.6 J. At 90° the tool lands square on; below that it lands on its edge.
+            </Typography>
+          </Box>
+        ) : (
+          <Box>
+            <Typography gutterBottom variant="body2">Applied Force (N)</Typography>
+            <Slider
+              value={simState.force}
+              onChange={(_, val) => handleNumberChange('force', val)}
+              min={0} max={500}
+              valueLabelDisplay="auto"
+              disabled={locked}
+              color="secondary"
+            />
+          </Box>
+        )}
         
         <Box>
-           <Typography gutterBottom variant="body2">Drag Direction (°)</Typography>
+           <Typography gutterBottom variant="body2">{striking ? 'Tool Heading (°)' : 'Drag Direction (°)'}</Typography>
            <Slider
             value={simState.direction}
             onChange={(_, val) => handleNumberChange('direction', val)}
             min={0} max={360}
             valueLabelDisplay="auto"
+            disabled={locked}
           />
         </Box>
 
-        <Box>
-           <Typography gutterBottom variant="body2">Tool Speed (mm/s)</Typography>
-           <Slider
-            value={simState.speed}
-            onChange={(_, val) => handleNumberChange('speed', val)}
-            min={1} max={100}
-            valueLabelDisplay="auto"
-          />
-        </Box>
+        {!striking && (
+          <>
+            <Box>
+               <Typography gutterBottom variant="body2">Tool Speed (mm/s)</Typography>
+               <Slider
+                value={simState.speed}
+                onChange={(_, val) => handleNumberChange('speed', val)}
+                min={1} max={100}
+                valueLabelDisplay="auto"
+                disabled={locked}
+              />
+            </Box>
 
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <TextField
-            label="Time Step (s)"
-            type="number"
-            value={Number.isFinite(simState.timeStep) ? simState.timeStep : ''}
-            onChange={(e) => {
-              const raw = e.target.value.trim();
-              handleChange('timeStep', raw === '' ? NaN : Number(raw));
-            }}
-            inputProps={{ min: 0, step: 'any' }}
-            error={!timeStepValid}
-            helperText={timeStepValid ? ' ' : 'Time step must be a positive number'}
-            fullWidth
-          />
-          <TextField
-            label="Steps per second"
-            value={timeStepValid ? stepsPerSecond.toFixed(2) : ''}
-            InputProps={{ readOnly: true }}
-            fullWidth
-          />
-        </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <TextField
+                label="Time Step (s)"
+                type="number"
+                value={Number.isFinite(simState.timeStep) ? simState.timeStep : ''}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  handleChange('timeStep', raw === '' ? NaN : Number(raw));
+                }}
+                inputProps={{ min: 0, step: 'any' }}
+                disabled={locked}
+                error={!timeStepValid}
+                helperText={timeStepValid ? ' ' : 'Time step must be a positive number'}
+                fullWidth
+              />
+              <TextField
+                label="Steps per second"
+                value={timeStepValid ? stepsPerSecond.toFixed(2) : ''}
+                InputProps={{ readOnly: true }}
+                fullWidth
+              />
+            </Box>
 
-        <Box>
-           <Typography gutterBottom variant="body2">Chatter/Vibration</Typography>
-           <Slider
-            value={simState.chatter}
-            onChange={(_, val) => handleNumberChange('chatter', val)}
-            min={0} max={1} step={0.05}
-            valueLabelDisplay="auto"
-          />
-        </Box>
+            <Box>
+               <Typography gutterBottom variant="body2">Chatter/Vibration</Typography>
+               <Slider
+                value={simState.chatter}
+                onChange={(_, val) => handleNumberChange('chatter', val)}
+                min={0} max={1} step={0.05}
+                valueLabelDisplay="auto"
+                disabled={locked}
+              />
+            </Box>
+          </>
+        )}
 
         <Box>
            <Typography gutterBottom variant="body2">Micro-Wear (Edge Condition)</Typography>
@@ -155,6 +238,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
             onChange={(_, val) => handleNumberChange('toolWear', val)}
             min={0} max={1} step={0.05}
             valueLabelDisplay="auto"
+            disabled={locked}
           />
         </Box>
       </Box>
@@ -165,7 +249,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         Target Material
       </Typography>
       
-      <FormControl fullWidth size="small" sx={{ mt: 2, mb: 3 }}>
+      <FormControl fullWidth size="small" sx={{ mt: 2, mb: 3 }} disabled={locked}>
         <InputLabel>Surface Material</InputLabel>
         <Select
           value={simState.material}
@@ -189,6 +273,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           onChange={(_, val) => handleNumberChange('materialThicknessMm', val)}
           min={0.1} max={5} step={0.05}
           valueLabelDisplay="auto"
+          disabled={locked}
           color="secondary"
         />
         {!materialThicknessValid && (
@@ -198,6 +283,12 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         )}
       </Box>
 
+      <SeedField
+        seed={simState.randomSeed}
+        disabled={locked}
+        onCommit={(seed) => handleChange('randomSeed', seed)}
+      />
+
       <Divider sx={{ my: 3 }} />
 
       <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 2 }}>
@@ -205,7 +296,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
       </Typography>
 
       <Box sx={{ mt: 2, mb: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <FormControl fullWidth size="small">
+        <FormControl fullWidth size="small" disabled={locked}>
           <InputLabel>Resolution (pts/mm)</InputLabel>
           <Select
             value={simState.resolution}
@@ -218,7 +309,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
           </Select>
         </FormControl>
 
-        <FormControl fullWidth size="small">
+        <FormControl fullWidth size="small" disabled={locked}>
           <InputLabel>View Mode</InputLabel>
           <Select
             value={simState.viewMode}
@@ -264,6 +355,16 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         <FormControlLabel
           control={
             <Checkbox
+              checked={simState.showDetail}
+              onChange={(e) => handleChange('showDetail', e.target.checked)}
+            />
+          }
+          label="Show Striation Detail Overlay"
+        />
+
+        <FormControlLabel
+          control={
+            <Checkbox
               checked={simState.loopGhost}
               onChange={(e) => handleChange('loopGhost', e.target.checked)}
             />
@@ -295,6 +396,7 @@ const Controls: React.FC<ControlsProps> = ({ simState, setSimState, onExecute, o
         color="error"
         startIcon={<Trash2 />}
         onClick={onReset}
+        disabled={locked}
       >
         CLEAR SURFACE
       </Button>

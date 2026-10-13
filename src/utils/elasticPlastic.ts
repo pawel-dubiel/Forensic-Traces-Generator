@@ -33,13 +33,14 @@ export const validateElasticPlasticMaterial = (
 // - Aluminum, Brass: https://www.engineeringtoolbox.com/young-modulus-d_417.html
 // - Steel (A36): https://en.wikipedia.org/wiki/A36_steel
 // - Wood (Pine, along grain): https://www.engineeringtoolbox.com/timber-mechanical-properties-d_1789.html
+//   Yield is the compressive strength, kept below the 40 MPa indentation hardness used by the simulation loop.
 // - Gold E + hardness: https://en.wikipedia.org/wiki/Gold (yield estimated from hardness)
 // Note: hardeningModulusMPa values are heuristic and should be calibrated per alloy.
 export const ELASTIC_PLASTIC_MATERIALS: Record<ElasticPlasticMaterialKey, ElasticPlasticMaterialProps> = {
   aluminum: { youngModulusGPa: 69, yieldStrengthMPa: 95, hardeningModulusMPa: 1500 },
   brass: { youngModulusGPa: 110, yieldStrengthMPa: 250, hardeningModulusMPa: 2000 },
   steel: { youngModulusGPa: 200, yieldStrengthMPa: 250, hardeningModulusMPa: 4000 },
-  wood: { youngModulusGPa: 11, yieldStrengthMPa: 80, hardeningModulusMPa: 200 },
+  wood: { youngModulusGPa: 11, yieldStrengthMPa: 30, hardeningModulusMPa: 200 },
   gold: { youngModulusGPa: 79, yieldStrengthMPa: 70, hardeningModulusMPa: 1200 },
 };
 
@@ -62,6 +63,10 @@ export class ElasticPlasticModel {
     this.youngModulusMPa = material.youngModulusGPa * 1000;
     this.yieldStrengthMPa = material.yieldStrengthMPa;
     this.hardeningModulusMPa = material.hardeningModulusMPa;
+  }
+
+  getInitialElasticStrainLimit(): number {
+    return this.yieldStrengthMPa / this.youngModulusMPa;
   }
 
   computePermanentDepth(
