@@ -134,3 +134,5 @@ dist
 dist
 dist-ssr
 *.local
+# Compiled tests: written by `npm test`
+dist-tests
