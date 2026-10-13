@@ -28,3 +28,22 @@ test('generates NairnMPM XML for screwdriver fixture', async () => {
   assert.match(xml, /<Rect xmin="7" xmax="13" ymin="27" ymax="33"\/>/);
   assert.match(xml, /<yield>80<\/yield>/);
 });
+
+test('generated XML uses only elements and attributes that the NairnMPM input schema declares', async () => {
+  const scenario = await load('knife_aluminum_baseline.json');
+  const xml = generateNairnXml(scenario);
+
+  // Checked against NairnMPM.dtd: there is no <Processors> element, <SetDirection> takes no attributes,
+  // and friction belongs to the multimaterial contact settings, not to a material.
+  assert.doesNotMatch(xml, /<Processors>/);
+  assert.doesNotMatch(xml, /<SetDirection\b[^>]*\b[xy]=/);
+  assert.doesNotMatch(xml, /<Material\b[^>]*>[\s\S]*?<ContactPosition>[\s\S]*?<\/Material>/);
+  assert.match(xml, /<MultiMaterialMode Vmin="1">\s*<Friction>[\d.]+<\/Friction>\s*<\/MultiMaterialMode>/);
+});
+
+test('archive root is relative to the run directory the solver starts in', async () => {
+  const scenario = await load('knife_aluminum_baseline.json');
+  const xml = generateNairnXml(scenario);
+
+  assert.match(xml, new RegExp(`<ArchiveRoot>archive/${scenario.outputName}\\.</ArchiveRoot>`));
+});

@@ -59,7 +59,8 @@ export const generateNairnXml = (scenario: Scenario) => {
   const yMax = simulation.originYmm + simulation.heightMm;
   const { vx, vy } = toolVelocity(scenario);
 
-  const archiveRoot = `runs/${xmlEscape(scenario.id)}/archive/${xmlEscape(scenario.outputName)}.`;
+  // Relative to the run directory, which is where the solver is started.
+  const archiveRoot = `archive/${xmlEscape(scenario.outputName)}.`;
   const archiveOrder = solver.archiveFields.join(',');
 
   return [
@@ -78,7 +79,6 @@ export const generateNairnXml = (scenario: Scenario) => {
     '  </Header>',
     '',
     '  <MPMHeader>',
-    `    <Processors>${formatNumber(solver.processors)}</Processors>`,
     `    <MPMMethod>${xmlEscape(solver.mpmMethod)}</MPMMethod>`,
     `    <MatlPtsPerElement>${formatNumber(simulation.particlesPerElement)}</MatlPtsPerElement>`,
     `    <TimeStep units="sec">${formatNumber(simulation.timeStepSeconds)}</TimeStep>`,
@@ -87,7 +87,10 @@ export const generateNairnXml = (scenario: Scenario) => {
     `    <ArchiveRoot>${archiveRoot}</ArchiveRoot>`,
     `    <MPMArchiveOrder>${xmlEscape(archiveOrder)}</MPMArchiveOrder>`,
     '    <GIMP/>',
-    '    <MultiMaterialMode Vmin="1"/>',
+    // Contact friction between the tool and the target is a property of the multimaterial contact.
+    '    <MultiMaterialMode Vmin="1">',
+    `      <Friction>${formatNumber(target.properties.frictionCoefficient)}</Friction>`,
+    '    </MultiMaterialMode>',
     '  </MPMHeader>',
     '',
     '  <Mesh output="file">',
@@ -113,12 +116,11 @@ export const generateNairnXml = (scenario: Scenario) => {
     '    <Hardening>Linear</Hardening>',
     `    <yield>${formatNumber(target.properties.yieldStrengthMPa)}</yield>`,
     `    <Ep>${formatNumber(target.properties.hardeningModulusMPa)}</Ep>`,
-    `    <ContactPosition>${formatNumber(target.properties.frictionCoefficient)}</ContactPosition>`,
     '  </Material>',
     '',
     '  <Material Type="35" Name="Tool">',
+    // A rigid contact body moves with the velocity given on its <Body>.
     '    <rho>7.85</rho>',
-    `    <SetDirection x="${formatNumber(vx)}" y="${formatNumber(vy)}"/>`,
     '  </Material>',
     '',
     '</JANFEAInput>',

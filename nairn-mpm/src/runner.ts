@@ -36,10 +36,12 @@ export const runNairnMpm = async (
   rootDir = 'runs'
 ) => {
   const generated = await generateInputFiles(scenario, rootDir);
-  const command = [executables.nairnMpmBin, basename(generated.inputPath)];
+  // The processor count is a solver command-line option; the input schema has no element for it.
+  const args = ['-np', `${scenario.solver.processors}`, basename(generated.inputPath)];
+  const command = [executables.nairnMpmBin, ...args];
 
   try {
-    const result = await execFileAsync(executables.nairnMpmBin, [basename(generated.inputPath)], {
+    const result = await execFileAsync(executables.nairnMpmBin, args, {
       cwd: generated.runDir,
       maxBuffer: 1024 * 1024 * 20
     });

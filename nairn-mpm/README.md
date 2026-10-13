@@ -74,4 +74,8 @@ The generated XML follows the documented high-level NairnMPM structure:
 - `<MaterialPoints>` with a target body and rigid tool body
 - `<Material>` entries for `IsoPlasticity` target material and `RigidContact` tool material
 
+The generated XML has been checked against the element and attribute declarations in `NairnMPM.dtd` (from the NairnMPM repository). That check found and removed three things the schema does not allow: a `<Processors>` element (the processor count is now passed to the solver as `-np`), friction written as `<ContactPosition>` inside a material (it is now `<Friction>` inside `<MultiMaterialMode>`), and `x`/`y` attributes on `<SetDirection>` (dropped: a rigid contact body takes its velocity from `<Body>`). `<ArchiveRoot>` is now relative to the run directory, where the solver is started.
+
+Still unverified, because it needs the solver itself: whether analysis id `10` is the intended plane-stress mode, whether `<MPMArchiveOrder>` accepts the field names in `solver.archiveFields`, and whether a top-view 2D model can stand in for a surface scratch at all.
+
 This is a prototype input generator. The first calibration pass should run the two fixtures, inspect actual NairnMPM validation errors if any, and adjust only the Nairn XML mapping, not the scenario schema.
